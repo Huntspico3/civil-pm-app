@@ -1,0 +1,17 @@
+{
+  "name": "civil-pm-app",
+  "version": "1.0.0",
+  "description": "Civil engineering project management app - task assignment by role",
+  "main": "server.js",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "multer": "^2.0.0",
+    "@anthropic-ai/sdk": "^0.32.1"
+  }
+}
