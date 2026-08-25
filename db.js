@@ -15,7 +15,7 @@ const TASK_STATUSES = ['To Do', 'In Progress', 'Review', 'Done'];
 
 function seed() {
   return {
-    nextIds: { user: 6, project: 3, task: 8, externalContact: 5, report: 1 },
+    nextIds: { user: 6, project: 3, task: 8, externalContact: 5, report: 1, rfi: 4 },
     users: [
       { id: 1, name: 'Alex Rivera', email: 'admin@example.com', phone: '555-0101', role: 'Civil', isAdmin: true },
       { id: 2, name: 'Priya Nair', email: 'priya@example.com', phone: '555-0102', role: 'Structural', isAdmin: false },
@@ -58,7 +58,42 @@ function seed() {
       { id: 3, name: 'Michael Osei', company: 'City Council Planning', category: 'Local Authority', phone: '555-0203', email: 'michael.osei@citycouncil.example', projectId: null },
       { id: 4, name: 'Laura Bennett', company: 'Bennett & Co QS', category: 'Quantity Surveyor', phone: '555-0204', email: 'laura.bennett@bennettqs.example', projectId: 1 }
     ],
-    reports: []
+    reports: [],
+    rfis: [
+      {
+        id: 1,
+        projectId: 1,
+        question: 'Can you confirm the required rebar cover for the north pier footing per the updated spec?',
+        assignedTo: 2,
+        dueDate: '2026-08-10',
+        answer: null,
+        createdBy: 1,
+        createdAt: '2026-08-01T09:00:00.000Z',
+        answeredAt: null
+      },
+      {
+        id: 2,
+        projectId: 1,
+        question: 'What is the expected drying time before applying the epoxy coating to the repaired deck section?',
+        assignedTo: 2,
+        dueDate: '2026-09-15',
+        answer: null,
+        createdBy: 1,
+        createdAt: '2026-08-20T09:00:00.000Z',
+        answeredAt: null
+      },
+      {
+        id: 3,
+        projectId: 2,
+        question: "Should the new storm drain tie into the existing 300mm main on Maple St or route to the new outfall?",
+        assignedTo: 1,
+        dueDate: '2026-07-20',
+        answer: "Tie into the new outfall per the updated drainage plan — the existing 300mm main doesn't have capacity for the added flow.",
+        createdBy: 5,
+        createdAt: '2026-07-10T09:00:00.000Z',
+        answeredAt: '2026-07-18T14:30:00.000Z'
+      }
+    ]
   };
 }
 

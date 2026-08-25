@@ -5,7 +5,7 @@ const state = {
   roles: [],
   stages: [],
   taskStatuses: [],
-  view: 'dashboard', // 'dashboard' | 'projects' | 'project' | 'project-board' | 'contacts' | 'team' | 'portfolio' | 'my-tasks' | 'offsite-reports'
+  view: 'dashboard', // 'dashboard' | 'projects' | 'project' | 'project-board' | 'project-rfis' | 'contacts' | 'team' | 'portfolio' | 'my-tasks' | 'offsite-reports'
   activeProjectId: null,
   dashboardGroupBy: 'project',
   myTasksUserId: null,
@@ -199,7 +199,7 @@ function renderShell() {
   if (state.me.isAdmin) nav.push({ key: 'team', label: 'Team' });
 
   const navHtml = nav.map(n => `
-    <button data-nav="${n.key}" class="${state.view === n.key || (n.key === 'projects' && (state.view === 'project' || state.view === 'project-board')) ? 'active' : ''}">${n.label}</button>
+    <button data-nav="${n.key}" class="${state.view === n.key || (n.key === 'projects' && ['project', 'project-board', 'project-rfis'].includes(state.view)) ? 'active' : ''}">${n.label}</button>
   `).join('');
 
   return `
@@ -228,6 +228,7 @@ function bindShell() {
   else if (state.view === 'projects') renderProjects(main);
   else if (state.view === 'project') renderProjectDetail(main, state.activeProjectId);
   else if (state.view === 'project-board') renderProjectBoard(main, state.activeProjectId);
+  else if (state.view === 'project-rfis') renderProjectRfis(main, state.activeProjectId);
   else if (state.view === 'contacts') renderContacts(main);
   else if (state.view === 'external-contacts') renderExternalContacts(main);
   else if (state.view === 'team') renderTeam(main);
@@ -518,6 +519,25 @@ async function renderProjects(main) {
   });
 }
 
+// ---------------- PROJECT TABS (shared by List / Board / RFIs) ----------------
+
+function projectTabsHtml(active) {
+  const tabs = [
+    { key: 'project', label: 'List View' },
+    { key: 'project-board', label: 'Board View' },
+    { key: 'project-rfis', label: 'RFIs' }
+  ];
+  return `<div class="dash-toggle">${tabs.map(t => `
+    <button class="btn ${t.key === active ? '' : 'secondary'}" data-project-tab="${t.key}">${t.label}</button>
+  `).join('')}</div>`;
+}
+
+function bindProjectTabs(main, projectId) {
+  main.querySelectorAll('[data-project-tab]').forEach(el => {
+    el.addEventListener('click', () => setView(el.dataset.projectTab, { projectId }));
+  });
+}
+
 // ---------------- PROJECT DETAIL ----------------
 
 async function renderProjectDetail(main, projectId) {
@@ -587,12 +607,10 @@ async function renderProjectDetail(main, projectId) {
     <button class="back-link" id="back-to-projects">&larr; Back to Projects</button>
     <h1>${escapeHtml(project.name)}</h1>
     <p class="subtitle">${escapeHtml(project.description || '')}</p>
+    ${projectTabsHtml('project')}
 
     <div class="card">
-      <div class="section-header">
-        <h2>Tasks</h2>
-        <button class="btn secondary small" id="open-board-view">Board View</button>
-      </div>
+      <h2>Tasks</h2>
       <table>
         <thead><tr><th>Task</th><th>Role</th><th>Assignee</th><th>Status</th></tr></thead>
         <tbody>${taskRows}</tbody>
@@ -642,7 +660,7 @@ async function renderProjectDetail(main, projectId) {
   `;
 
   main.querySelector('#back-to-projects').addEventListener('click', () => setView('projects'));
-  main.querySelector('#open-board-view').addEventListener('click', () => setView('project-board', { projectId }));
+  bindProjectTabs(main, projectId);
 
   main.querySelectorAll('[data-view-report]').forEach(el => {
     el.addEventListener('click', () => showReportModal(main, Number(el.dataset.viewReport), false));
@@ -750,19 +768,15 @@ async function renderProjectBoard(main, projectId) {
 
   main.innerHTML = `
     <button class="back-link" id="back-to-projects">&larr; Back to Projects</button>
-    <div class="section-header">
-      <div>
-        <h1>${escapeHtml(project.name)}</h1>
-        <p class="subtitle">Board view. Drag a card between columns to update its status, or click a card for details.</p>
-      </div>
-      <button class="btn secondary small" id="open-list-view">List View</button>
-    </div>
+    <h1>${escapeHtml(project.name)}</h1>
+    <p class="subtitle">Board view. Drag a card between columns to update its status, or click a card for details.</p>
+    ${projectTabsHtml('project-board')}
     <div class="board">${columnsHtml}</div>
     <div id="task-modal-root"></div>
   `;
 
   main.querySelector('#back-to-projects').addEventListener('click', () => setView('projects'));
-  main.querySelector('#open-list-view').addEventListener('click', () => setView('project', { projectId }));
+  bindProjectTabs(main, projectId);
 
   main.querySelectorAll('[data-task-card]').forEach(card => {
     const taskId = Number(card.dataset.taskCard);
@@ -895,6 +909,118 @@ async function showTaskModal(main, taskId, projectId) {
       }
     });
   }
+}
+
+// ---------------- PROJECT RFIs ----------------
+
+async function renderProjectRfis(main, projectId) {
+  main.innerHTML = `<p class="subtitle">Loading…</p>`;
+  let project, rfis;
+  try {
+    project = await api('/projects/' + projectId);
+    rfis = await api('/projects/' + projectId + '/rfis');
+  } catch (e) {
+    main.innerHTML = `<button class="back-link" id="back-to-projects">&larr; Back to Projects</button><p class="error-text">${escapeHtml(e.message)}</p>`;
+    main.querySelector('#back-to-projects').addEventListener('click', () => setView('projects'));
+    return;
+  }
+
+  const isManager = state.me.isAdmin || project.createdBy === state.me.id;
+  const userOptions = state.users.map(u => `<option value="${u.id}">${escapeHtml(u.name)}</option>`).join('');
+
+  const rfiCardsHtml = rfis.length === 0
+    ? '<p class="empty-state">No RFIs for this project yet.</p>'
+    : rfis.map(r => {
+        const canAnswer = r.status === 'Open' && (isManager || r.assignedTo === state.me.id);
+        const answerBlockHtml = r.status === 'Answered'
+          ? `<div class="rfi-answer"><div class="rfi-answer-label">Answer</div>${escapeHtml(r.answer)}</div>`
+          : canAnswer
+            ? `<form class="rfi-answer-form" data-answer-form="${r.id}">
+                 <textarea placeholder="Type an answer…" required></textarea>
+                 <button class="btn small" type="submit">Submit Answer</button>
+                 <div class="error-text" data-answer-error="${r.id}"></div>
+               </form>`
+            : `<p class="hint">Awaiting answer from ${escapeHtml(r.assignee ? r.assignee.name : 'assignee')}.</p>`;
+
+        return `
+          <div class="card rfi-card">
+            <div class="rfi-question">${escapeHtml(r.question)}</div>
+            <div class="rfi-meta">
+              <span>Assigned to <strong>${escapeHtml(r.assignee ? r.assignee.name : 'Unknown')}</strong></span>
+              <span>Due ${formatDate(r.dueDate)}</span>
+              <span class="status ${statusClass(r.status)}">${r.status}</span>
+              ${r.overdue ? '<span class="badge badge-overdue">Overdue</span>' : ''}
+            </div>
+            ${answerBlockHtml}
+          </div>
+        `;
+      }).join('');
+
+  main.innerHTML = `
+    <button class="back-link" id="back-to-projects">&larr; Back to Projects</button>
+    <h1>${escapeHtml(project.name)}</h1>
+    <p class="subtitle">Requests for Information — ask a question, assign it to a team member, and track the answer.</p>
+    ${projectTabsHtml('project-rfis')}
+
+    <div class="card">
+      <h2>New RFI</h2>
+      <form id="new-rfi-form">
+        <div><label>Question</label><textarea name="question" required placeholder="What do you need clarified?"></textarea></div>
+        <div class="form-row">
+          <div><label>Assign to</label><select name="assignedTo" required>${userOptions}</select></div>
+          <div><label>Due Date</label><input name="dueDate" type="date" required /></div>
+        </div>
+        <div id="rfi-form-error" class="error-text"></div>
+        <button class="btn" type="submit">Create RFI</button>
+      </form>
+    </div>
+
+    <div class="card">
+      <h2>RFIs</h2>
+      ${rfiCardsHtml}
+    </div>
+  `;
+
+  main.querySelector('#back-to-projects').addEventListener('click', () => setView('projects'));
+  bindProjectTabs(main, projectId);
+
+  main.querySelector('#new-rfi-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const form = e.target;
+    const errBox = form.querySelector('#rfi-form-error');
+    errBox.textContent = '';
+    try {
+      await api('/projects/' + projectId + '/rfis', {
+        method: 'POST',
+        body: JSON.stringify({
+          question: form.question.value,
+          assignedTo: form.assignedTo.value,
+          dueDate: form.dueDate.value
+        })
+      });
+      renderProjectRfis(main, projectId);
+    } catch (err) {
+      errBox.textContent = err.message;
+    }
+  });
+
+  main.querySelectorAll('[data-answer-form]').forEach(form => {
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const rfiId = Number(form.dataset.answerForm);
+      const errBox = main.querySelector(`[data-answer-error="${rfiId}"]`);
+      errBox.textContent = '';
+      try {
+        await api('/rfis/' + rfiId, {
+          method: 'PATCH',
+          body: JSON.stringify({ answer: form.querySelector('textarea').value })
+        });
+        renderProjectRfis(main, projectId);
+      } catch (err) {
+        errBox.textContent = err.message;
+      }
+    });
+  });
 }
 
 // ---------------- TEAM (admin) ----------------

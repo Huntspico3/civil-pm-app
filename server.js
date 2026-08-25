@@ -455,6 +455,89 @@ app.get('/api/projects/:id/reports', requireAuth, (req, res) => {
   res.json(approved);
 });
 
+// --- RFIs (Requests for Information) ---
+
+function enrichRfi(rfi, data) {
+  const status = rfi.answer ? 'Answered' : 'Open';
+  const today = new Date().toISOString().slice(0, 10);
+  return {
+    ...rfi,
+    status,
+    overdue: status === 'Open' && rfi.dueDate < today,
+    assignee: data.users.find(u => u.id === rfi.assignedTo) || null,
+    createdByUser: data.users.find(u => u.id === rfi.createdBy) || null
+  };
+}
+
+app.get('/api/projects/:id/rfis', requireAuth, (req, res) => {
+  const data = db.load();
+  const project = data.projects.find(p => p.id === Number(req.params.id));
+  if (!project) return res.status(404).json({ error: 'Project not found' });
+  if (!canSeeProject(req.user, project, data.tasks)) return res.status(403).json({ error: 'Not visible to you' });
+
+  const enriched = data.rfis
+    .filter(r => r.projectId === project.id)
+    .map(r => enrichRfi(r, data));
+
+  // Most urgent first: overdue-open, then open (soonest due date), then answered (newest first).
+  enriched.sort((a, b) => {
+    const rank = (r) => r.overdue ? 0 : r.status === 'Open' ? 1 : 2;
+    const rankDiff = rank(a) - rank(b);
+    if (rankDiff !== 0) return rankDiff;
+    if (a.status === 'Open') return a.dueDate < b.dueDate ? -1 : a.dueDate > b.dueDate ? 1 : 0;
+    return new Date(b.createdAt) - new Date(a.createdAt);
+  });
+
+  res.json(enriched);
+});
+
+app.post('/api/projects/:id/rfis', requireAuth, (req, res) => {
+  const data = db.load();
+  const project = data.projects.find(p => p.id === Number(req.params.id));
+  if (!project) return res.status(404).json({ error: 'Project not found' });
+  if (!canSeeProject(req.user, project, data.tasks)) return res.status(403).json({ error: 'Not visible to you' });
+
+  const { question, assignedTo, dueDate } = req.body;
+  if (!question || !assignedTo || !dueDate) {
+    return res.status(400).json({ error: 'question, assignedTo, and dueDate are required' });
+  }
+  const assignee = data.users.find(u => u.id === Number(assignedTo));
+  if (!assignee) return res.status(400).json({ error: 'Assignee not found' });
+
+  const rfi = {
+    id: db.nextId('rfi'),
+    projectId: project.id,
+    question,
+    assignedTo: assignee.id,
+    dueDate,
+    answer: null,
+    createdBy: req.user.id,
+    createdAt: new Date().toISOString(),
+    answeredAt: null
+  };
+  data.rfis.push(rfi);
+  db.save(data);
+  res.status(201).json(enrichRfi(rfi, data));
+});
+
+app.patch('/api/rfis/:id', requireAuth, (req, res) => {
+  const data = db.load();
+  const rfi = data.rfis.find(r => r.id === Number(req.params.id));
+  if (!rfi) return res.status(404).json({ error: 'RFI not found' });
+
+  const canAnswer = rfi.assignedTo === req.user.id || isManager(req.user, data);
+  if (!canAnswer) return res.status(403).json({ error: 'Only the assigned team member (or a project manager) can answer this RFI' });
+
+  const { answer } = req.body;
+  if (!answer || !answer.trim()) return res.status(400).json({ error: 'Answer text is required' });
+
+  rfi.answer = answer.trim();
+  rfi.answeredAt = new Date().toISOString();
+
+  db.save(data);
+  res.json(enrichRfi(rfi, data));
+});
+
 // --- portfolio timeline (org-wide, visible to every logged-in user) ---
 app.get('/api/portfolio', requireAuth, (req, res) => {
   const data = db.load();
