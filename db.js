@@ -99,6 +99,40 @@ function seed() {
 
 let cache = null;
 
+// Maps each top-level collection to its nextIds counter key. Whenever a data.json
+// was created before a given collection existed (e.g. an older save from before the
+// RFI feature shipped), that key is simply absent from the file on disk. Backfilling
+// it here means every past and future collection self-heals on load instead of
+// crashing with "Cannot read properties of undefined" the first time it's touched.
+const COLLECTIONS = {
+  users: 'user',
+  projects: 'project',
+  tasks: 'task',
+  externalContacts: 'externalContact',
+  reports: 'report',
+  rfis: 'rfi'
+};
+
+function backfillSchema(data) {
+  let changed = false;
+  if (!data.nextIds) {
+    data.nextIds = {};
+    changed = true;
+  }
+  for (const [collectionKey, idKey] of Object.entries(COLLECTIONS)) {
+    if (!Array.isArray(data[collectionKey])) {
+      data[collectionKey] = [];
+      changed = true;
+    }
+    if (typeof data.nextIds[idKey] !== 'number') {
+      const maxId = data[collectionKey].reduce((max, item) => Math.max(max, item.id || 0), 0);
+      data.nextIds[idKey] = maxId + 1;
+      changed = true;
+    }
+  }
+  return changed;
+}
+
 function load() {
   if (cache) return cache;
   if (!fs.existsSync(DB_PATH)) {
@@ -106,6 +140,7 @@ function load() {
     save(cache);
   } else {
     cache = JSON.parse(fs.readFileSync(DB_PATH, 'utf-8'));
+    if (backfillSchema(cache)) save(cache);
   }
   return cache;
 }
