@@ -106,6 +106,9 @@ app.get('/api/roles', (req, res) => res.json(db.ROLES));
 // --- stages ---
 app.get('/api/stages', (req, res) => res.json(db.STAGES));
 
+// --- task statuses (kanban board columns) ---
+app.get('/api/task-statuses', (req, res) => res.json(db.TASK_STATUSES));
+
 // --- session ---
 app.get('/api/me', requireAuth, (req, res) => {
   const data = db.load();
@@ -220,7 +223,7 @@ app.post('/api/projects/:id/tasks', requireAuth, (req, res) => {
     description: description || '',
     requiredRole,
     assigneeId: assignee ? assignee.id : null,
-    status: 'To Do'
+    status: db.TASK_STATUSES[0]
   };
   data.tasks.push(task);
   db.save(data);
@@ -248,7 +251,10 @@ app.patch('/api/tasks/:id', requireAuth, (req, res) => {
       task.assigneeId = assignee.id;
     }
   }
-  if (status !== undefined) task.status = status;
+  if (status !== undefined) {
+    if (!db.TASK_STATUSES.includes(status)) return res.status(400).json({ error: 'Invalid status' });
+    task.status = status;
+  }
   if (isManager && title !== undefined) task.title = title;
   if (isManager && description !== undefined) task.description = description;
   if (isManager && requiredRole !== undefined) {

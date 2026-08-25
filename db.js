@@ -9,6 +9,9 @@ const DB_PATH = path.join(DATA_DIR, 'data.json');
 
 const ROLES = ['Structural', 'Civil', 'Geotechnical', 'Environmental', 'Transportation'];
 const STAGES = ['Planning', 'Design', 'Approval', 'Construction', 'Completed'];
+// Task board columns. Kept as a simple ordered list (like ROLES/STAGES above) so
+// column names/order can become editable later without changing the data shape.
+const TASK_STATUSES = ['To Do', 'In Progress', 'Review', 'Done'];
 
 function seed() {
   return {
@@ -84,4 +87,4 @@ function nextId(kind) {
   return id;
 }
 
-module.exports = { load, save, nextId, ROLES, STAGES, DATA_DIR };
+module.exports = { load, save, nextId, ROLES, STAGES, TASK_STATUSES, DATA_DIR };

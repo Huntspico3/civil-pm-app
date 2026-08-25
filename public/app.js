@@ -4,7 +4,8 @@ const state = {
   users: [],
   roles: [],
   stages: [],
-  view: 'dashboard', // 'dashboard' | 'projects' | 'project' | 'contacts' | 'team' | 'portfolio' | 'my-tasks' | 'offsite-reports'
+  taskStatuses: [],
+  view: 'dashboard', // 'dashboard' | 'projects' | 'project' | 'project-board' | 'contacts' | 'team' | 'portfolio' | 'my-tasks' | 'offsite-reports'
   activeProjectId: null,
   dashboardGroupBy: 'project',
   myTasksUserId: null,
@@ -64,6 +65,7 @@ function start() {
 async function boot() {
   state.roles = await api('/roles');
   state.stages = await api('/stages');
+  state.taskStatuses = await api('/task-statuses');
   state.users = await api('/users');
   if (state.currentUserId) {
     try {
@@ -197,7 +199,7 @@ function renderShell() {
   if (state.me.isAdmin) nav.push({ key: 'team', label: 'Team' });
 
   const navHtml = nav.map(n => `
-    <button data-nav="${n.key}" class="${state.view === n.key || (n.key === 'projects' && state.view === 'project') ? 'active' : ''}">${n.label}</button>
+    <button data-nav="${n.key}" class="${state.view === n.key || (n.key === 'projects' && (state.view === 'project' || state.view === 'project-board')) ? 'active' : ''}">${n.label}</button>
   `).join('');
 
   return `
@@ -225,6 +227,7 @@ function bindShell() {
   if (state.view === 'dashboard') renderDashboard(main);
   else if (state.view === 'projects') renderProjects(main);
   else if (state.view === 'project') renderProjectDetail(main, state.activeProjectId);
+  else if (state.view === 'project-board') renderProjectBoard(main, state.activeProjectId);
   else if (state.view === 'contacts') renderContacts(main);
   else if (state.view === 'external-contacts') renderExternalContacts(main);
   else if (state.view === 'team') renderTeam(main);
@@ -572,7 +575,7 @@ async function renderProjectDetail(main, projectId) {
             <td>
               ${canChangeStatus
                 ? `<select class="select-inline" data-action="status" data-task="${t.id}">
-                    ${['To Do', 'In Progress', 'Done'].map(s => `<option value="${s}" ${s === t.status ? 'selected' : ''}>${s}</option>`).join('')}
+                    ${state.taskStatuses.map(s => `<option value="${s}" ${s === t.status ? 'selected' : ''}>${s}</option>`).join('')}
                   </select>`
                 : `<span class="status ${statusClass(t.status)}">${t.status}</span>`}
             </td>
@@ -586,7 +589,10 @@ async function renderProjectDetail(main, projectId) {
     <p class="subtitle">${escapeHtml(project.description || '')}</p>
 
     <div class="card">
-      <h2>Tasks</h2>
+      <div class="section-header">
+        <h2>Tasks</h2>
+        <button class="btn secondary small" id="open-board-view">Board View</button>
+      </div>
       <table>
         <thead><tr><th>Task</th><th>Role</th><th>Assignee</th><th>Status</th></tr></thead>
         <tbody>${taskRows}</tbody>
@@ -636,6 +642,7 @@ async function renderProjectDetail(main, projectId) {
   `;
 
   main.querySelector('#back-to-projects').addEventListener('click', () => setView('projects'));
+  main.querySelector('#open-board-view').addEventListener('click', () => setView('project-board', { projectId }));
 
   main.querySelectorAll('[data-view-report]').forEach(el => {
     el.addEventListener('click', () => showReportModal(main, Number(el.dataset.viewReport), false));
@@ -697,6 +704,197 @@ async function renderProjectDetail(main, projectId) {
       errBox.textContent = err.message;
     }
   });
+}
+
+// ---------------- PROJECT BOARD (KANBAN) ----------------
+
+async function renderProjectBoard(main, projectId) {
+  main.innerHTML = `<p class="subtitle">Loading…</p>`;
+  let project, tasks;
+  try {
+    project = await api('/projects/' + projectId);
+    tasks = await api('/projects/' + projectId + '/tasks');
+  } catch (e) {
+    main.innerHTML = `<button class="back-link" id="back-to-projects">&larr; Back to Projects</button><p class="error-text">${escapeHtml(e.message)}</p>`;
+    main.querySelector('#back-to-projects').addEventListener('click', () => setView('projects'));
+    return;
+  }
+
+  const isManager = state.me.isAdmin || project.createdBy === state.me.id;
+
+  const columnsHtml = state.taskStatuses.map(status => {
+    const columnTasks = tasks.filter(t => t.status === status);
+    const cardsHtml = columnTasks.map(t => {
+      const canDrag = isManager || t.assigneeId === state.me.id;
+      return `
+        <div class="board-card" data-task-card="${t.id}" ${canDrag ? 'draggable="true"' : ''}>
+          <div class="board-card-title">${escapeHtml(t.title)}</div>
+          <div class="board-card-meta">
+            <span class="badge role-${t.requiredRole}">${t.requiredRole}</span>
+            <span>${t.assignee ? escapeHtml(t.assignee.name) : 'Unassigned'}</span>
+          </div>
+        </div>
+      `;
+    }).join('');
+
+    return `
+      <div class="board-column" data-status-column="${escapeHtml(status)}">
+        <div class="board-column-header">
+          <span>${escapeHtml(status)}</span>
+          <span class="board-column-count">${columnTasks.length}</span>
+        </div>
+        <div class="board-column-body" data-drop-status="${escapeHtml(status)}">${cardsHtml}</div>
+      </div>
+    `;
+  }).join('');
+
+  main.innerHTML = `
+    <button class="back-link" id="back-to-projects">&larr; Back to Projects</button>
+    <div class="section-header">
+      <div>
+        <h1>${escapeHtml(project.name)}</h1>
+        <p class="subtitle">Board view. Drag a card between columns to update its status, or click a card for details.</p>
+      </div>
+      <button class="btn secondary small" id="open-list-view">List View</button>
+    </div>
+    <div class="board">${columnsHtml}</div>
+    <div id="task-modal-root"></div>
+  `;
+
+  main.querySelector('#back-to-projects').addEventListener('click', () => setView('projects'));
+  main.querySelector('#open-list-view').addEventListener('click', () => setView('project', { projectId }));
+
+  main.querySelectorAll('[data-task-card]').forEach(card => {
+    const taskId = Number(card.dataset.taskCard);
+
+    card.addEventListener('click', () => showTaskModal(main, taskId, projectId));
+
+    card.addEventListener('dragstart', (e) => {
+      e.dataTransfer.setData('text/plain', String(taskId));
+      e.dataTransfer.effectAllowed = 'move';
+      card.classList.add('dragging');
+    });
+    card.addEventListener('dragend', () => card.classList.remove('dragging'));
+  });
+
+  main.querySelectorAll('[data-drop-status]').forEach(column => {
+    column.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      column.classList.add('drag-over');
+    });
+    column.addEventListener('dragleave', () => column.classList.remove('drag-over'));
+    column.addEventListener('drop', async (e) => {
+      e.preventDefault();
+      column.classList.remove('drag-over');
+      const taskId = Number(e.dataTransfer.getData('text/plain'));
+      const newStatus = column.dataset.dropStatus;
+      try {
+        await api('/tasks/' + taskId, { method: 'PATCH', body: JSON.stringify({ status: newStatus }) });
+        renderProjectBoard(main, projectId);
+      } catch (err) {
+        alert(err.message);
+        renderProjectBoard(main, projectId);
+      }
+    });
+  });
+}
+
+async function showTaskModal(main, taskId, projectId) {
+  const modalRoot = main.querySelector('#task-modal-root');
+  if (!modalRoot) return;
+
+  let tasks, project;
+  try {
+    tasks = await api('/projects/' + projectId + '/tasks');
+    project = await api('/projects/' + projectId);
+  } catch (e) {
+    alert(e.message);
+    return;
+  }
+  const task = tasks.find(t => t.id === taskId);
+  if (!task) return;
+
+  const isManager = state.me.isAdmin || project.createdBy === state.me.id;
+  const canReassign = isManager;
+  const canChangeStatus = isManager || task.assigneeId === state.me.id;
+
+  function assigneeOptionsForRole(role, selectedId) {
+    const matching = state.users.filter(u => u.role === role);
+    const others = state.users.filter(u => u.role !== role);
+    const sel = (id) => (selectedId != null && Number(selectedId) === id) ? ' selected' : '';
+    let html = `<option value=""${selectedId == null ? ' selected' : ''}>— Unassigned —</option>`;
+    if (matching.length) {
+      html += `<optgroup label="Suggested (${role})">` +
+        matching.map(u => `<option value="${u.id}"${sel(u.id)}>${escapeHtml(u.name)}</option>`).join('') +
+        `</optgroup>`;
+    }
+    if (others.length) {
+      html += `<optgroup label="Other team members">` +
+        others.map(u => `<option value="${u.id}"${sel(u.id)}>${escapeHtml(u.name)} (${u.role})</option>`).join('') +
+        `</optgroup>`;
+    }
+    return html;
+  }
+
+  modalRoot.innerHTML = `
+    <div class="modal-overlay" id="task-modal-overlay">
+      <div class="modal-card">
+        <button class="modal-close" id="task-modal-close">&times;</button>
+        <h2>${escapeHtml(task.title)}</h2>
+        <span class="badge role-${task.requiredRole}">${task.requiredRole}</span>
+        <p class="subtitle">${escapeHtml(task.description || 'No description')}</p>
+        <div class="form-row">
+          <div>
+            <label>Assignee</label>
+            ${canReassign
+              ? `<select class="select-inline" id="task-modal-assignee">${assigneeOptionsForRole(task.requiredRole, task.assigneeId)}</select>`
+              : `<div>${task.assignee ? escapeHtml(task.assignee.name) : 'Unassigned'}</div>`}
+          </div>
+          <div>
+            <label>Status</label>
+            ${canChangeStatus
+              ? `<select class="select-inline" id="task-modal-status">${state.taskStatuses.map(s => `<option value="${s}" ${s === task.status ? 'selected' : ''}>${s}</option>`).join('')}</select>`
+              : `<div><span class="status ${statusClass(task.status)}">${task.status}</span></div>`}
+          </div>
+        </div>
+        <div id="task-modal-error" class="error-text"></div>
+      </div>
+    </div>
+  `;
+
+  const overlay = document.getElementById('task-modal-overlay');
+  const close = () => { modalRoot.innerHTML = ''; };
+  document.getElementById('task-modal-close').addEventListener('click', close);
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+
+  const errBox = document.getElementById('task-modal-error');
+  const assigneeSelect = document.getElementById('task-modal-assignee');
+  if (assigneeSelect) {
+    assigneeSelect.addEventListener('change', async () => {
+      try {
+        await api('/tasks/' + taskId, {
+          method: 'PATCH',
+          body: JSON.stringify({ assigneeId: assigneeSelect.value ? Number(assigneeSelect.value) : null })
+        });
+        close();
+        renderProjectBoard(main, projectId);
+      } catch (err) {
+        errBox.textContent = err.message;
+      }
+    });
+  }
+  const statusSelect = document.getElementById('task-modal-status');
+  if (statusSelect) {
+    statusSelect.addEventListener('change', async () => {
+      try {
+        await api('/tasks/' + taskId, { method: 'PATCH', body: JSON.stringify({ status: statusSelect.value }) });
+        close();
+        renderProjectBoard(main, projectId);
+      } catch (err) {
+        errBox.textContent = err.message;
+      }
+    });
+  }
 }
 
 // ---------------- TEAM (admin) ----------------
