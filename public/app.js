@@ -9,6 +9,7 @@ const state = {
   activeProjectId: null,
   dashboardGroupBy: 'project',
   myTasksUserId: null,
+  myOpenRfiCount: 0,
   me: null
 };
 
@@ -75,7 +76,17 @@ async function boot() {
       localStorage.removeItem('civilpm_user_id');
     }
   }
+  if (state.me) await refreshMyOpenRfiCount();
   render();
+}
+
+async function refreshMyOpenRfiCount() {
+  try {
+    const data = await api('/my-rfis');
+    state.myOpenRfiCount = data.rfis.length;
+  } catch (e) {
+    // non-critical — leave the last known count in place
+  }
 }
 
 // ---------------- SHARED PASSWORD GATE ----------------
@@ -131,6 +142,7 @@ function logout() {
   state.currentUserId = null;
   state.me = null;
   state.myTasksUserId = null;
+  state.myOpenRfiCount = 0;
   localStorage.removeItem('civilpm_user_id');
   render();
 }
@@ -199,7 +211,9 @@ function renderShell() {
   if (state.me.isAdmin) nav.push({ key: 'team', label: 'Team' });
 
   const navHtml = nav.map(n => `
-    <button data-nav="${n.key}" class="${state.view === n.key || (n.key === 'projects' && ['project', 'project-board', 'project-rfis'].includes(state.view)) ? 'active' : ''}">${n.label}</button>
+    <button data-nav="${n.key}" class="${state.view === n.key || (n.key === 'projects' && ['project', 'project-board', 'project-rfis'].includes(state.view)) ? 'active' : ''}">
+      ${n.label}${n.key === 'my-tasks' && state.myOpenRfiCount > 0 ? `<span class="nav-badge" title="Open RFIs waiting on you">${state.myOpenRfiCount}</span>` : ''}
+    </button>
   `).join('');
 
   return `
@@ -375,15 +389,35 @@ async function renderMyTasks(main) {
   if (state.myTasksUserId === null) state.myTasksUserId = state.me.id;
 
   main.innerHTML = `<h1>My Tasks</h1><p class="subtitle">Loading…</p>`;
-  let data;
+  let data, rfiData;
   try {
     data = await api('/my-tasks?userId=' + state.myTasksUserId);
+    rfiData = await api('/my-rfis?userId=' + state.myTasksUserId);
   } catch (e) {
     main.innerHTML = `<h1>My Tasks</h1><p class="error-text">${escapeHtml(e.message)}</p>`;
     return;
   }
 
   const { user, tasks } = data;
+  const openRfis = rfiData.rfis;
+
+  const rfiSectionHtml = `
+    <div class="card">
+      <h2>${state.me.isAdmin && user.id !== state.me.id ? `${escapeHtml(user.name)}'s` : 'My'} Open RFIs</h2>
+      ${openRfis.length === 0
+        ? '<p class="empty-state">Nothing waiting — no open RFIs assigned.</p>'
+        : openRfis.map(r => `
+            <div class="rfi-card">
+              <div class="rfi-question">${escapeHtml(r.question)}</div>
+              <div class="rfi-meta">
+                <span>${escapeHtml(r.project ? r.project.name : 'Unknown project')}</span>
+                <span>Due ${formatDate(r.dueDate)}</span>
+                ${r.overdue ? '<span class="badge badge-overdue">Overdue</span>' : ''}
+              </div>
+            </div>
+          `).join('')}
+    </div>
+  `;
 
   const pickerHtml = state.me.isAdmin
     ? `
@@ -427,6 +461,7 @@ async function renderMyTasks(main) {
     <h1>My Tasks</h1>
     <p class="subtitle">${state.me.isAdmin ? `Tasks assigned to ${escapeHtml(user.name)}, across every project.` : 'Everything assigned to you, across every project.'}</p>
     ${pickerHtml}
+    ${rfiSectionHtml}
     ${groupsHtml}
   `;
 
@@ -998,7 +1033,8 @@ async function renderProjectRfis(main, projectId) {
           dueDate: form.dueDate.value
         })
       });
-      renderProjectRfis(main, projectId);
+      await refreshMyOpenRfiCount();
+      render();
     } catch (err) {
       errBox.textContent = err.message;
     }
@@ -1015,7 +1051,8 @@ async function renderProjectRfis(main, projectId) {
           method: 'PATCH',
           body: JSON.stringify({ answer: form.querySelector('textarea').value })
         });
-        renderProjectRfis(main, projectId);
+        await refreshMyOpenRfiCount();
+        render();
       } catch (err) {
         errBox.textContent = err.message;
       }

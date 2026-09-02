@@ -5,6 +5,7 @@ const crypto = require('crypto');
 const multer = require('multer');
 const db = require('./db');
 const ai = require('./ai');
+const email = require('./email');
 
 const UPLOADS_DIR = path.join(db.DATA_DIR, 'uploads');
 fs.mkdirSync(UPLOADS_DIR, { recursive: true });
@@ -518,6 +519,15 @@ app.post('/api/projects/:id/rfis', requireAuth, (req, res) => {
   data.rfis.push(rfi);
   db.save(data);
   res.status(201).json(enrichRfi(rfi, data));
+
+  // Fire-and-forget: notification email should never delay or fail the response above.
+  email.sendRfiAssignedEmail({
+    to: assignee.email,
+    toName: assignee.name,
+    projectName: project.name,
+    question: rfi.question,
+    askedByName: req.user.name
+  }).catch(() => {});
 });
 
 app.patch('/api/rfis/:id', requireAuth, (req, res) => {
@@ -536,6 +546,28 @@ app.patch('/api/rfis/:id', requireAuth, (req, res) => {
 
   db.save(data);
   res.json(enrichRfi(rfi, data));
+});
+
+// My open RFIs — a lightweight "something is waiting on you" list, across every project.
+// Admins can check another team member's via ?userId=, same pattern as /api/my-tasks.
+app.get('/api/my-rfis', requireAuth, (req, res) => {
+  const data = db.load();
+  let targetUser = req.user;
+  if (req.query.userId !== undefined) {
+    if (Number(req.query.userId) !== req.user.id && !req.user.isAdmin) {
+      return res.status(403).json({ error: 'Only an admin can view another team member\'s RFIs' });
+    }
+    const found = data.users.find(u => u.id === Number(req.query.userId));
+    if (!found) return res.status(404).json({ error: 'User not found' });
+    targetUser = found;
+  }
+
+  const openRfis = data.rfis
+    .filter(r => r.assignedTo === targetUser.id && !r.answer)
+    .map(r => ({ ...enrichRfi(r, data), project: data.projects.find(p => p.id === r.projectId) || null }))
+    .sort((a, b) => a.overdue === b.overdue ? (a.dueDate < b.dueDate ? -1 : 1) : (a.overdue ? -1 : 1));
+
+  res.json({ user: targetUser, rfis: openRfis });
 });
 
 // --- portfolio timeline (org-wide, visible to every logged-in user) ---

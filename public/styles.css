@@ -60,6 +60,18 @@ body {
 .topbar nav button:hover { background: var(--bg); }
 .topbar nav button.active { background: var(--primary); color: white; }
 
+.nav-badge {
+  display: inline-block;
+  margin-left: 0.35rem;
+  padding: 0.05rem 0.4rem;
+  border-radius: 999px;
+  background: var(--danger);
+  color: white;
+  font-size: 0.72rem;
+  font-weight: 700;
+  vertical-align: middle;
+}
+
 .topbar .who { display: flex; align-items: center; gap: 0.75rem; font-size: 0.9rem; }
 .topbar .who .name { font-weight: 600; }
 .topbar .who .switch { color: var(--primary); cursor: pointer; background: none; border: none; font-size: 0.85rem; text-decoration: underline; }
