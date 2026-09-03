@@ -7,7 +7,10 @@ const DATA_DIR = process.env.DATA_DIR || __dirname;
 fs.mkdirSync(DATA_DIR, { recursive: true });
 const DB_PATH = path.join(DATA_DIR, 'data.json');
 
-const ROLES = ['Structural', 'Civil', 'Geotechnical', 'Environmental', 'Transportation'];
+// Default engineering roles/disciplines, used only to seed a brand-new data.json
+// or to backfill one saved before roles became admin-editable. The live, editable
+// list lives in data.roles from here on.
+const DEFAULT_ROLES = ['Structural', 'Civil', 'Geotechnical', 'Environmental', 'Transportation'];
 const STAGES = ['Planning', 'Design', 'Approval', 'Construction', 'Completed'];
 // Task board columns. Kept as a simple ordered list (like ROLES/STAGES above) so
 // column names/order can become editable later without changing the data shape.
@@ -16,6 +19,7 @@ const TASK_STATUSES = ['To Do', 'In Progress', 'Review', 'Done'];
 function seed() {
   return {
     nextIds: { user: 6, project: 3, task: 8, externalContact: 5, report: 1, rfi: 4 },
+    roles: DEFAULT_ROLES.slice(),
     users: [
       { id: 1, name: 'Alex Rivera', email: 'admin@example.com', phone: '555-0101', role: 'Civil', isAdmin: true },
       { id: 2, name: 'Priya Nair', email: 'priya@example.com', phone: '555-0102', role: 'Structural', isAdmin: false },
@@ -119,6 +123,10 @@ function backfillSchema(data) {
     data.nextIds = {};
     changed = true;
   }
+  if (!Array.isArray(data.roles)) {
+    data.roles = DEFAULT_ROLES.slice();
+    changed = true;
+  }
   for (const [collectionKey, idKey] of Object.entries(COLLECTIONS)) {
     if (!Array.isArray(data[collectionKey])) {
       data[collectionKey] = [];
@@ -157,4 +165,4 @@ function nextId(kind) {
   return id;
 }
 
-module.exports = { load, save, nextId, ROLES, STAGES, TASK_STATUSES, DATA_DIR };
+module.exports = { load, save, nextId, DEFAULT_ROLES, STAGES, TASK_STATUSES, DATA_DIR };

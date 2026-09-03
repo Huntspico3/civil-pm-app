@@ -101,8 +101,40 @@ function canSeeProject(user, project, tasks) {
   return tasks.some(t => t.projectId === project.id && t.assigneeId === user.id);
 }
 
-// --- roles ---
-app.get('/api/roles', (req, res) => res.json(db.ROLES));
+// --- roles (engineering disciplines) — admin-editable ---
+app.get('/api/roles', (req, res) => res.json(db.load().roles));
+
+app.post('/api/roles', requireAdmin, (req, res) => {
+  const name = (req.body.name || '').trim();
+  if (!name) return res.status(400).json({ error: 'Role name is required' });
+
+  const data = db.load();
+  if (data.roles.some(r => r.toLowerCase() === name.toLowerCase())) {
+    return res.status(400).json({ error: 'That role already exists' });
+  }
+  data.roles.push(name);
+  db.save(data);
+  res.status(201).json(data.roles);
+});
+
+app.delete('/api/roles', requireAdmin, (req, res) => {
+  const name = (req.body.name || '').trim();
+  const data = db.load();
+  if (!data.roles.includes(name)) return res.status(404).json({ error: 'Role not found' });
+
+  const userCount = data.users.filter(u => u.role === name).length;
+  const taskCount = data.tasks.filter(t => t.requiredRole === name).length;
+  if (userCount > 0 || taskCount > 0) {
+    const parts = [];
+    if (userCount > 0) parts.push(`${userCount} team member${userCount === 1 ? '' : 's'}`);
+    if (taskCount > 0) parts.push(`${taskCount} task${taskCount === 1 ? '' : 's'}`);
+    return res.status(400).json({ error: `Cannot remove "${name}" — it's still assigned to ${parts.join(' and ')}.` });
+  }
+
+  data.roles = data.roles.filter(r => r !== name);
+  db.save(data);
+  res.json(data.roles);
+});
 
 // --- stages ---
 app.get('/api/stages', (req, res) => res.json(db.STAGES));
@@ -125,8 +157,8 @@ app.get('/api/users', (req, res) => {
 app.post('/api/users', requireAdmin, (req, res) => {
   const { name, email, phone, role } = req.body;
   if (!name || !email || !role) return res.status(400).json({ error: 'name, email, and role are required' });
-  if (!db.ROLES.includes(role)) return res.status(400).json({ error: 'Invalid role' });
   const data = db.load();
+  if (!data.roles.includes(role)) return res.status(400).json({ error: 'Invalid role' });
   if (data.users.some(u => u.email.toLowerCase() === String(email).toLowerCase())) {
     return res.status(400).json({ error: 'A user with that email already exists' });
   }
@@ -209,7 +241,7 @@ app.post('/api/projects/:id/tasks', requireAuth, (req, res) => {
 
   const { title, description, requiredRole, assigneeId } = req.body;
   if (!title || !requiredRole) return res.status(400).json({ error: 'title and requiredRole are required' });
-  if (!db.ROLES.includes(requiredRole)) return res.status(400).json({ error: 'Invalid role' });
+  if (!data.roles.includes(requiredRole)) return res.status(400).json({ error: 'Invalid role' });
 
   let assignee = null;
   if (assigneeId) {
@@ -259,7 +291,7 @@ app.patch('/api/tasks/:id', requireAuth, (req, res) => {
   if (isManager && title !== undefined) task.title = title;
   if (isManager && description !== undefined) task.description = description;
   if (isManager && requiredRole !== undefined) {
-    if (!db.ROLES.includes(requiredRole)) return res.status(400).json({ error: 'Invalid role' });
+    if (!data.roles.includes(requiredRole)) return res.status(400).json({ error: 'Invalid role' });
     task.requiredRole = requiredRole;
   }
 

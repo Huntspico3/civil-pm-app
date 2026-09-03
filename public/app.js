@@ -1110,6 +1110,24 @@ async function renderTeam(main) {
         <tbody>${rows}</tbody>
       </table>
     </div>
+
+    <div class="card">
+      <h2>Manage Roles</h2>
+      <p class="hint">These are the engineering disciplines available across the app — assigning team members, tasks, etc.</p>
+      <div class="role-manage-list">
+        ${state.roles.map(r => `
+          <div class="role-manage-row">
+            <span class="badge role-${r}">${escapeHtml(r)}</span>
+            <button class="btn small secondary" data-remove-role="${escapeHtml(r)}">Remove</button>
+          </div>
+        `).join('')}
+      </div>
+      <form id="add-role-form" class="form-row" style="margin-top:0.8rem; align-items:flex-end;">
+        <div><label>New role name</label><input name="roleName" required placeholder="e.g. Mechanical" /></div>
+        <button class="btn" type="submit">Add Role</button>
+      </form>
+      <div id="roles-error" class="error-text"></div>
+    </div>
   `;
 
   main.querySelector('#invite-form').addEventListener('submit', async (e) => {
@@ -1127,6 +1145,40 @@ async function renderTeam(main) {
     } catch (err) {
       errBox.textContent = err.message;
     }
+  });
+
+  const rolesErrBox = main.querySelector('#roles-error');
+
+  main.querySelector('#add-role-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    rolesErrBox.textContent = '';
+    const form = e.target;
+    try {
+      state.roles = await api('/roles', {
+        method: 'POST',
+        body: JSON.stringify({ name: form.roleName.value })
+      });
+      renderTeam(main);
+    } catch (err) {
+      rolesErrBox.textContent = err.message;
+    }
+  });
+
+  main.querySelectorAll('[data-remove-role]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      rolesErrBox.textContent = '';
+      const roleName = btn.dataset.removeRole;
+      if (!confirm(`Remove the "${roleName}" role?`)) return;
+      try {
+        state.roles = await api('/roles', {
+          method: 'DELETE',
+          body: JSON.stringify({ name: roleName })
+        });
+        renderTeam(main);
+      } catch (err) {
+        rolesErrBox.textContent = err.message;
+      }
+    });
   });
 }
 
