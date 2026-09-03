@@ -10,7 +10,12 @@ const DB_PATH = path.join(DATA_DIR, 'data.json');
 // Default engineering roles/disciplines, used only to seed a brand-new data.json
 // or to backfill one saved before roles became admin-editable. The live, editable
 // list lives in data.roles from here on.
-const DEFAULT_ROLES = ['Structural', 'Civil', 'Geotechnical', 'Environmental', 'Transportation'];
+const DEFAULT_ROLES = [
+  'Structural', 'Civil', 'Geotechnical', 'Environmental', 'Transportation',
+  'Highways / Roads Engineer', 'Water Resources / Hydraulics Engineer', 'Coastal Engineer',
+  'Construction / Site Engineer', 'Quantity Surveying', 'MEP Coordinator',
+  'Project Manager / Planning Engineer', 'Materials / Quality Engineer', 'BIM Coordinator'
+];
 const STAGES = ['Planning', 'Design', 'Approval', 'Construction', 'Completed'];
 // Task board columns. Kept as a simple ordered list (like ROLES/STAGES above) so
 // column names/order can become editable later without changing the data shape.
