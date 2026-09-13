@@ -275,6 +275,35 @@ tr:last-child td { border-bottom: none; }
 }
 .gantt-bar:hover { filter: brightness(1.1); }
 
+/* Unfilled (remaining) portion of a bar is washed out with a translucent white
+   overlay, anchored to the right, so the vivid project color on the left shows
+   how much of the bar is complete. */
+.gantt-bar-remaining {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(255, 255, 255, 0.55);
+  pointer-events: none;
+}
+.gantt-bar-text {
+  position: relative;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  text-shadow: 0 1px 1px rgba(0,0,0,0.25);
+}
+
+.gantt-progress-track {
+  width: 100%;
+  height: 5px;
+  border-radius: 999px;
+  background: var(--border);
+  overflow: hidden;
+}
+.gantt-progress-fill { height: 100%; border-radius: 999px; }
+
 /* --- modal --- */
 .modal-overlay {
   position: fixed;
@@ -385,6 +414,8 @@ tr:last-child td { border-bottom: none; }
 .rfi-answer .rfi-answer-label { font-weight: 600; font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.02em; color: var(--text-muted); margin-bottom: 0.3rem; }
 .rfi-answer-form { display: flex; flex-direction: column; gap: 0.5rem; }
 
-/* --- manage roles --- */
-.role-manage-list { display: flex; flex-wrap: wrap; gap: 0.6rem; }
-.role-manage-row { display: flex; align-items: center; gap: 0.5rem; background: var(--bg); border: 1px solid var(--border); border-radius: 999px; padding: 0.25rem 0.4rem 0.25rem 0.7rem; }
+/* --- admin settings: editable option lists (roles, stages, statuses, categories) --- */
+.option-list { display: flex; flex-wrap: wrap; gap: 0.6rem; }
+.option-row { display: flex; align-items: center; gap: 0.5rem; background: var(--bg); border: 1px solid var(--border); border-radius: 999px; padding: 0.25rem 0.4rem 0.25rem 0.7rem; }
+.option-list-section { margin-bottom: 1.5rem; }
+.option-list-section:last-child { margin-bottom: 0; }

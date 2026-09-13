@@ -101,46 +101,66 @@ function canSeeProject(user, project, tasks) {
   return tasks.some(t => t.projectId === project.id && t.assigneeId === user.id);
 }
 
-// --- roles (engineering disciplines) — admin-editable ---
-app.get('/api/roles', (req, res) => res.json(db.load().roles));
+const HEX_COLOR_RE = /^#[0-9a-fA-F]{6}$/;
 
-app.post('/api/roles', requireAdmin, (req, res) => {
-  const name = (req.body.name || '').trim();
-  if (!name) return res.status(400).json({ error: 'Role name is required' });
+// --- admin-editable option lists (roles, stages, task statuses, external contact
+// categories) — all managed the same way from the Settings page. `usageParts`
+// returns human-readable counts of what currently uses a given option, so removal
+// can be blocked with a clear message instead of silently breaking existing data.
+function registerOptionList(path, getList, usageParts) {
+  app.get(path, (req, res) => res.json(getList(db.load())));
 
-  const data = db.load();
-  if (data.roles.some(r => r.toLowerCase() === name.toLowerCase())) {
-    return res.status(400).json({ error: 'That role already exists' });
-  }
-  data.roles.push(name);
-  db.save(data);
-  res.status(201).json(data.roles);
-});
+  app.post(path, requireAdmin, (req, res) => {
+    const name = (req.body.name || '').trim();
+    if (!name) return res.status(400).json({ error: 'Name is required' });
 
-app.delete('/api/roles', requireAdmin, (req, res) => {
-  const name = (req.body.name || '').trim();
-  const data = db.load();
-  if (!data.roles.includes(name)) return res.status(404).json({ error: 'Role not found' });
+    const data = db.load();
+    const list = getList(data);
+    if (list.some(v => v.toLowerCase() === name.toLowerCase())) {
+      return res.status(400).json({ error: 'That option already exists' });
+    }
+    list.push(name);
+    db.save(data);
+    res.status(201).json(list);
+  });
 
-  const userCount = data.users.filter(u => u.role === name).length;
-  const taskCount = data.tasks.filter(t => t.requiredRole === name).length;
-  if (userCount > 0 || taskCount > 0) {
-    const parts = [];
-    if (userCount > 0) parts.push(`${userCount} team member${userCount === 1 ? '' : 's'}`);
-    if (taskCount > 0) parts.push(`${taskCount} task${taskCount === 1 ? '' : 's'}`);
-    return res.status(400).json({ error: `Cannot remove "${name}" — it's still assigned to ${parts.join(' and ')}.` });
-  }
+  app.delete(path, requireAdmin, (req, res) => {
+    const name = (req.body.name || '').trim();
+    const data = db.load();
+    const list = getList(data);
+    if (!list.includes(name)) return res.status(404).json({ error: 'Option not found' });
 
-  data.roles = data.roles.filter(r => r !== name);
-  db.save(data);
-  res.json(data.roles);
-});
+    const parts = usageParts(data, name);
+    if (parts.length > 0) {
+      return res.status(400).json({ error: `Cannot remove "${name}" — it's still used by ${parts.join(' and ')}.` });
+    }
 
-// --- stages ---
-app.get('/api/stages', (req, res) => res.json(db.STAGES));
+    list.splice(list.indexOf(name), 1);
+    db.save(data);
+    res.json(list);
+  });
+}
 
-// --- task statuses (kanban board columns) ---
-app.get('/api/task-statuses', (req, res) => res.json(db.TASK_STATUSES));
+function countPart(count, label) {
+  return count > 0 ? [`${count} ${label}${count === 1 ? '' : 's'}`] : [];
+}
+
+registerOptionList('/api/roles', (data) => data.roles, (data, name) => [
+  ...countPart(data.users.filter(u => u.role === name).length, 'team member'),
+  ...countPart(data.tasks.filter(t => t.requiredRole === name).length, 'task')
+]);
+
+registerOptionList('/api/stages', (data) => data.stages, (data, name) =>
+  countPart(data.projects.filter(p => p.stage === name).length, 'project')
+);
+
+registerOptionList('/api/task-statuses', (data) => data.taskStatuses, (data, name) =>
+  countPart(data.tasks.filter(t => t.status === name).length, 'task')
+);
+
+registerOptionList('/api/external-contact-categories', (data) => data.externalContactCategories, (data, name) =>
+  countPart(data.externalContacts.filter(c => c.category === name).length, 'external contact')
+);
 
 // --- session ---
 app.get('/api/me', requireAuth, (req, res) => {
@@ -184,15 +204,20 @@ app.get('/api/projects', requireAuth, (req, res) => {
 });
 
 app.post('/api/projects', requireAuth, (req, res) => {
-  const { name, description, startDate, endDate, stage } = req.body;
+  const { name, description, startDate, endDate, stage, color, progress } = req.body;
   if (!name) return res.status(400).json({ error: 'name is required' });
-  if (stage && !db.STAGES.includes(stage)) return res.status(400).json({ error: 'Invalid stage' });
+  if (color !== undefined && !HEX_COLOR_RE.test(color)) return res.status(400).json({ error: 'Color must be a hex value like #2563eb' });
+  if (progress !== undefined && (typeof progress !== 'number' || progress < 0 || progress > 100)) {
+    return res.status(400).json({ error: 'Progress must be a number between 0 and 100' });
+  }
+
+  const data = db.load();
+  if (stage && !data.stages.includes(stage)) return res.status(400).json({ error: 'Invalid stage' });
 
   const today = new Date();
   const defaultStart = today.toISOString().slice(0, 10);
   const defaultEnd = new Date(today.getTime() + 90 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
 
-  const data = db.load();
   const project = {
     id: db.nextId('project'),
     name,
@@ -200,7 +225,9 @@ app.post('/api/projects', requireAuth, (req, res) => {
     createdBy: req.user.id,
     startDate: startDate || defaultStart,
     endDate: endDate || defaultEnd,
-    stage: stage || db.STAGES[0]
+    stage: stage || data.stages[0],
+    color: color || db.PROJECT_COLOR_PALETTE[data.projects.length % db.PROJECT_COLOR_PALETTE.length],
+    progress: progress !== undefined ? progress : 0
   };
   data.projects.push(project);
   db.save(data);
@@ -212,6 +239,30 @@ app.get('/api/projects/:id', requireAuth, (req, res) => {
   const project = data.projects.find(p => p.id === Number(req.params.id));
   if (!project) return res.status(404).json({ error: 'Project not found' });
   if (!canSeeProject(req.user, project, data.tasks)) return res.status(403).json({ error: 'Not visible to you' });
+  res.json(project);
+});
+
+app.patch('/api/projects/:id', requireAuth, (req, res) => {
+  const data = db.load();
+  const project = data.projects.find(p => p.id === Number(req.params.id));
+  if (!project) return res.status(404).json({ error: 'Project not found' });
+
+  const canEdit = req.user.isAdmin || project.createdBy === req.user.id;
+  if (!canEdit) return res.status(403).json({ error: 'Only an admin or this project\'s creator can edit it' });
+
+  const { color, progress } = req.body;
+  if (color !== undefined) {
+    if (!HEX_COLOR_RE.test(color)) return res.status(400).json({ error: 'Color must be a hex value like #2563eb' });
+    project.color = color;
+  }
+  if (progress !== undefined) {
+    if (typeof progress !== 'number' || progress < 0 || progress > 100) {
+      return res.status(400).json({ error: 'Progress must be a number between 0 and 100' });
+    }
+    project.progress = progress;
+  }
+
+  db.save(data);
   res.json(project);
 });
 
@@ -256,7 +307,7 @@ app.post('/api/projects/:id/tasks', requireAuth, (req, res) => {
     description: description || '',
     requiredRole,
     assigneeId: assignee ? assignee.id : null,
-    status: db.TASK_STATUSES[0]
+    status: data.taskStatuses[0]
   };
   data.tasks.push(task);
   db.save(data);
@@ -285,7 +336,7 @@ app.patch('/api/tasks/:id', requireAuth, (req, res) => {
     }
   }
   if (status !== undefined) {
-    if (!db.TASK_STATUSES.includes(status)) return res.status(400).json({ error: 'Invalid status' });
+    if (!data.taskStatuses.includes(status)) return res.status(400).json({ error: 'Invalid status' });
     task.status = status;
   }
   if (isManager && title !== undefined) task.title = title;
@@ -618,6 +669,9 @@ app.get('/api/portfolio', requireAuth, (req, res) => {
       startDate: p.startDate,
       endDate: p.endDate,
       stage: p.stage,
+      color: p.color,
+      progress: p.progress,
+      createdBy: p.createdBy,
       team
     };
   });

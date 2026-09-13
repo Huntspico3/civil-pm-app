@@ -5,7 +5,8 @@ const state = {
   roles: [],
   stages: [],
   taskStatuses: [],
-  view: 'dashboard', // 'dashboard' | 'projects' | 'project' | 'project-board' | 'project-rfis' | 'contacts' | 'team' | 'portfolio' | 'my-tasks' | 'offsite-reports'
+  externalContactCategories: [],
+  view: 'dashboard', // 'dashboard' | 'projects' | 'project' | 'project-board' | 'project-rfis' | 'contacts' | 'team' | 'settings' | 'portfolio' | 'my-tasks' | 'offsite-reports'
   activeProjectId: null,
   dashboardGroupBy: 'project',
   myTasksUserId: null,
@@ -209,6 +210,7 @@ function renderShell() {
   ];
   if (state.me.isAdmin || state.me.isManager) nav.push({ key: 'external-contacts', label: 'External Contacts' });
   if (state.me.isAdmin) nav.push({ key: 'team', label: 'Team' });
+  if (state.me.isAdmin) nav.push({ key: 'settings', label: 'Settings' });
 
   const navHtml = nav.map(n => `
     <button data-nav="${n.key}" class="${state.view === n.key || (n.key === 'projects' && ['project', 'project-board', 'project-rfis'].includes(state.view)) ? 'active' : ''}">
@@ -246,6 +248,7 @@ function bindShell() {
   else if (state.view === 'contacts') renderContacts(main);
   else if (state.view === 'external-contacts') renderExternalContacts(main);
   else if (state.view === 'team') renderTeam(main);
+  else if (state.view === 'settings') renderSettings(main);
   else if (state.view === 'portfolio') renderPortfolio(main);
   else if (state.view === 'my-tasks') renderMyTasks(main);
   else if (state.view === 'offsite-reports') renderOffsiteReports(main);
@@ -1110,24 +1113,6 @@ async function renderTeam(main) {
         <tbody>${rows}</tbody>
       </table>
     </div>
-
-    <div class="card">
-      <h2>Manage Roles</h2>
-      <p class="hint">These are the engineering disciplines available across the app — assigning team members, tasks, etc.</p>
-      <div class="role-manage-list">
-        ${state.roles.map(r => `
-          <div class="role-manage-row">
-            <span class="badge role-${r}">${escapeHtml(r)}</span>
-            <button class="btn small secondary" data-remove-role="${escapeHtml(r)}">Remove</button>
-          </div>
-        `).join('')}
-      </div>
-      <form id="add-role-form" class="form-row" style="margin-top:0.8rem; align-items:flex-end;">
-        <div><label>New role name</label><input name="roleName" required placeholder="e.g. Mechanical" /></div>
-        <button class="btn" type="submit">Add Role</button>
-      </form>
-      <div id="roles-error" class="error-text"></div>
-    </div>
   `;
 
   main.querySelector('#invite-form').addEventListener('submit', async (e) => {
@@ -1146,40 +1131,132 @@ async function renderTeam(main) {
       errBox.textContent = err.message;
     }
   });
+}
 
-  const rolesErrBox = main.querySelector('#roles-error');
+// ---------------- ADMIN SETTINGS (editable option lists) ----------------
 
-  main.querySelector('#add-role-form').addEventListener('submit', async (e) => {
-    e.preventDefault();
-    rolesErrBox.textContent = '';
-    const form = e.target;
-    try {
-      state.roles = await api('/roles', {
-        method: 'POST',
-        body: JSON.stringify({ name: form.roleName.value })
-      });
-      renderTeam(main);
-    } catch (err) {
-      rolesErrBox.textContent = err.message;
-    }
-  });
+// Every customizable dropdown in the app, managed the same way: view, add, remove
+// (blocked with a clear message if still in use). Adding a new list later just
+// means adding one more entry here.
+const SETTINGS_LISTS = [
+  {
+    key: 'roles',
+    title: 'Engineering Roles',
+    path: '/roles',
+    hint: 'Used for a team member\'s specialism and a task\'s required discipline.',
+    badgeClass: (v) => `role-${v}`
+  },
+  {
+    key: 'stages',
+    title: 'Project Stages',
+    path: '/stages',
+    hint: 'A project\'s current stage, shown on the Portfolio Timeline.',
+    badgeClass: (v) => `stage-${v}`
+  },
+  {
+    key: 'taskStatuses',
+    title: 'Task Status Columns',
+    path: '/task-statuses',
+    hint: 'The columns shown on each project\'s Kanban board, in order.',
+    badgeClass: () => 'badge-outline'
+  },
+  {
+    key: 'externalContactCategories',
+    title: 'External Contact Categories',
+    path: '/external-contact-categories',
+    hint: 'Categories for external stakeholders (subcontractors, consultants, etc.).',
+    badgeClass: () => 'badge-outline'
+  }
+];
 
-  main.querySelectorAll('[data-remove-role]').forEach(btn => {
-    btn.addEventListener('click', async () => {
-      rolesErrBox.textContent = '';
-      const roleName = btn.dataset.removeRole;
-      if (!confirm(`Remove the "${roleName}" role?`)) return;
+function optionListSectionHtml(cfg, list) {
+  return `
+    <div class="option-list-section">
+      <h2>${escapeHtml(cfg.title)}</h2>
+      <p class="hint">${escapeHtml(cfg.hint)}</p>
+      <div class="option-list">
+        ${list.length === 0 ? '<p class="hint">No options yet.</p>' : list.map(v => `
+          <div class="option-row">
+            <span class="badge ${cfg.badgeClass(v)}">${escapeHtml(v)}</span>
+            <button class="btn small secondary" data-remove-option data-settings-key="${cfg.key}" data-value="${escapeHtml(v)}">Remove</button>
+          </div>
+        `).join('')}
+      </div>
+      <form class="form-row" data-add-option-form data-settings-key="${cfg.key}" style="margin-top:0.8rem; align-items:flex-end;">
+        <div><label>Add new</label><input name="value" required placeholder="Type a name…" /></div>
+        <button class="btn" type="submit">Add</button>
+      </form>
+      <div class="error-text" data-settings-error="${cfg.key}"></div>
+    </div>
+  `;
+}
+
+function bindSettingsSections(main) {
+  main.querySelectorAll('[data-add-option-form]').forEach(form => {
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const key = form.dataset.settingsKey;
+      const cfg = SETTINGS_LISTS.find(c => c.key === key);
+      const errBox = main.querySelector(`[data-settings-error="${key}"]`);
+      errBox.textContent = '';
       try {
-        state.roles = await api('/roles', {
-          method: 'DELETE',
-          body: JSON.stringify({ name: roleName })
-        });
-        renderTeam(main);
+        state[key] = await api(cfg.path, { method: 'POST', body: JSON.stringify({ name: form.value.value }) });
+        renderSettings(main);
       } catch (err) {
-        rolesErrBox.textContent = err.message;
+        errBox.textContent = err.message;
       }
     });
   });
+
+  main.querySelectorAll('[data-remove-option]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const key = btn.dataset.settingsKey;
+      const cfg = SETTINGS_LISTS.find(c => c.key === key);
+      const value = btn.dataset.value;
+      const errBox = main.querySelector(`[data-settings-error="${key}"]`);
+      errBox.textContent = '';
+      if (!confirm(`Remove "${value}"?`)) return;
+      try {
+        state[key] = await api(cfg.path, { method: 'DELETE', body: JSON.stringify({ name: value }) });
+        renderSettings(main);
+      } catch (err) {
+        errBox.textContent = err.message;
+      }
+    });
+  });
+}
+
+async function renderSettings(main) {
+  main.innerHTML = `<h1>Settings</h1><p class="subtitle">Loading…</p>`;
+  try {
+    state.roles = await api('/roles');
+    state.stages = await api('/stages');
+    state.taskStatuses = await api('/task-statuses');
+    state.externalContactCategories = await api('/external-contact-categories');
+  } catch (e) {
+    main.innerHTML = `<h1>Settings</h1><p class="error-text">${escapeHtml(e.message)}</p>`;
+    return;
+  }
+
+  const sectionsHtml = SETTINGS_LISTS.map(cfg => optionListSectionHtml(cfg, state[cfg.key])).join('');
+
+  main.innerHTML = `
+    <h1>Settings</h1>
+    <p class="subtitle">Manage every customizable list used across the app, all in one place.</p>
+    <div class="card">
+      ${sectionsHtml}
+      <div class="option-list-section">
+        <h2>RFI Status</h2>
+        <p class="hint">Set automatically based on whether an RFI has been answered — not directly editable.</p>
+        <div class="option-list">
+          <div class="option-row"><span class="status status-Open">Open</span></div>
+          <div class="option-row"><span class="status status-Answered">Answered</span></div>
+        </div>
+      </div>
+    </div>
+  `;
+
+  bindSettingsSections(main);
 }
 
 // ---------------- PORTFOLIO TIMELINE ----------------
@@ -1237,15 +1314,20 @@ async function renderPortfolio(main) {
     const endMs = new Date(p.endDate + 'T00:00:00').getTime();
     const left = pct(startMs);
     const width = Math.max(pct(endMs) - left, 1.5);
+    const progress = p.progress || 0;
+    const color = p.color || '#2563eb';
     return `
       <div class="gantt-row">
         <div class="gantt-label">
           <div>${escapeHtml(p.name)}</div>
           <span class="badge stage-${p.stage}">${p.stage}</span>
+          <div class="gantt-progress-track"><div class="gantt-progress-fill" style="width:${progress}%; background:${color};"></div></div>
+          <span class="hint">${progress}% complete</span>
         </div>
         <div class="gantt-track">
-          <div class="gantt-bar stage-${p.stage}" data-project="${p.id}" style="left:${left}%; width:${width}%;" title="${escapeHtml(p.name)}">
-            ${escapeHtml(p.name)}
+          <div class="gantt-bar" data-project="${p.id}" style="left:${left}%; width:${width}%; background:${color};" title="${escapeHtml(p.name)} — ${progress}% complete">
+            <div class="gantt-bar-remaining" style="width:${100 - progress}%;"></div>
+            <span class="gantt-bar-text">${escapeHtml(p.name)} · ${progress}%</span>
           </div>
         </div>
       </div>
@@ -1256,7 +1338,7 @@ async function renderPortfolio(main) {
 
   main.innerHTML = `
     <h1>Portfolio Timeline</h1>
-    <p class="subtitle">All projects across the organisation. Click a bar to see project details.</p>
+    <p class="subtitle">All projects across the organisation. Click a bar to see project details, change its color, or update progress.</p>
     <div class="card gantt">
       <div class="gantt-inner">
         <div class="gantt-scale">
@@ -1271,14 +1353,18 @@ async function renderPortfolio(main) {
   main.querySelectorAll('.gantt-bar').forEach(el => {
     el.addEventListener('click', () => {
       const project = projects.find(p => p.id === Number(el.dataset.project));
-      if (project) showProjectModal(project);
+      if (project) showProjectModal(project, main);
     });
   });
 }
 
-function showProjectModal(project) {
+function showProjectModal(project, boardMain) {
   const modalRoot = document.getElementById('portfolio-modal-root');
   if (!modalRoot) return;
+
+  const canEdit = state.me.isAdmin || project.createdBy === state.me.id;
+  const color = project.color || '#2563eb';
+  const progress = project.progress || 0;
 
   const teamHtml = project.team.length === 0
     ? `<p class="hint">No team members assigned yet.</p>`
@@ -1288,6 +1374,27 @@ function showProjectModal(project) {
           <span class="badge role-${u.role}">${u.role}</span>
         </li>
       `).join('')}</ul>`;
+
+  const colorProgressHtml = canEdit
+    ? `
+      <div class="form-row">
+        <div>
+          <label>Bar Color</label>
+          <input type="color" id="project-modal-color" value="${color}" style="width:100%; height:2.3rem; padding:0.2rem; cursor:pointer;" />
+        </div>
+        <div>
+          <label>Progress (%)</label>
+          <input type="number" id="project-modal-progress" min="0" max="100" step="1" value="${progress}" />
+        </div>
+      </div>
+      <div id="project-modal-error" class="error-text"></div>
+    `
+    : `
+      <div class="modal-dates">
+        <div><label>Color</label><div><span style="display:inline-block; width:14px; height:14px; border-radius:3px; background:${color}; vertical-align:middle;"></span></div></div>
+        <div><label>Progress</label><div>${progress}%</div></div>
+      </div>
+    `;
 
   modalRoot.innerHTML = `
     <div class="modal-overlay" id="project-modal-overlay">
@@ -1300,6 +1407,7 @@ function showProjectModal(project) {
           <div><label>Start Date</label><div>${formatDate(project.startDate)}</div></div>
           <div><label>End Date</label><div>${formatDate(project.endDate)}</div></div>
         </div>
+        ${colorProgressHtml}
         <h3>Assigned Team Members</h3>
         ${teamHtml}
       </div>
@@ -1310,6 +1418,37 @@ function showProjectModal(project) {
   const close = () => { modalRoot.innerHTML = ''; };
   document.getElementById('project-modal-close').addEventListener('click', close);
   overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+
+  if (canEdit) {
+    const errBox = document.getElementById('project-modal-error');
+    const colorInput = document.getElementById('project-modal-color');
+    const progressInput = document.getElementById('project-modal-progress');
+
+    colorInput.addEventListener('change', async () => {
+      errBox.textContent = '';
+      try {
+        await api('/projects/' + project.id, { method: 'PATCH', body: JSON.stringify({ color: colorInput.value }) });
+        renderPortfolio(boardMain);
+      } catch (err) {
+        errBox.textContent = err.message;
+      }
+    });
+
+    progressInput.addEventListener('change', async () => {
+      errBox.textContent = '';
+      const value = Number(progressInput.value);
+      if (Number.isNaN(value) || value < 0 || value > 100) {
+        errBox.textContent = 'Progress must be a number between 0 and 100';
+        return;
+      }
+      try {
+        await api('/projects/' + project.id, { method: 'PATCH', body: JSON.stringify({ progress: value }) });
+        renderPortfolio(boardMain);
+      } catch (err) {
+        errBox.textContent = err.message;
+      }
+    });
+  }
 }
 
 // ---------------- OFFSITE REPORTS ----------------

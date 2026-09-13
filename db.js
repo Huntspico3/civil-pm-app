@@ -16,15 +16,28 @@ const DEFAULT_ROLES = [
   'Construction / Site Engineer', 'Quantity Surveying', 'MEP Coordinator',
   'Project Manager / Planning Engineer', 'Materials / Quality Engineer', 'BIM Coordinator'
 ];
-const STAGES = ['Planning', 'Design', 'Approval', 'Construction', 'Completed'];
-// Task board columns. Kept as a simple ordered list (like ROLES/STAGES above) so
-// column names/order can become editable later without changing the data shape.
-const TASK_STATUSES = ['To Do', 'In Progress', 'Review', 'Done'];
+// Same admin-editable-list pattern as roles: these are only defaults for a
+// brand-new data.json or for backfilling an older one. Live lists are
+// data.stages, data.taskStatuses, and data.externalContactCategories.
+const DEFAULT_STAGES = ['Planning', 'Design', 'Approval', 'Construction', 'Completed'];
+const DEFAULT_TASK_STATUSES = ['To Do', 'In Progress', 'Review', 'Done'];
+const DEFAULT_EXTERNAL_CONTACT_CATEGORIES = ['Subcontractor', 'Structural Consultant', 'Local Authority', 'Quantity Surveyor', 'Client Representative', 'Consultant', 'Supplier'];
+
+// Default palette for new projects' Gantt bars — cycled by creation order so
+// consecutive projects get visually distinct colors out of the box. Admins can
+// override any project's color individually via the Portfolio Timeline.
+const PROJECT_COLOR_PALETTE = [
+  '#2563eb', '#dc2626', '#059669', '#d97706', '#7c3aed',
+  '#0891b2', '#db2777', '#65a30d', '#ea580c', '#4f46e5'
+];
 
 function seed() {
   return {
     nextIds: { user: 6, project: 3, task: 8, externalContact: 5, report: 1, rfi: 4 },
     roles: DEFAULT_ROLES.slice(),
+    stages: DEFAULT_STAGES.slice(),
+    taskStatuses: DEFAULT_TASK_STATUSES.slice(),
+    externalContactCategories: DEFAULT_EXTERNAL_CONTACT_CATEGORIES.slice(),
     users: [
       { id: 1, name: 'Alex Rivera', email: 'admin@example.com', phone: '555-0101', role: 'Civil', isAdmin: true },
       { id: 2, name: 'Priya Nair', email: 'priya@example.com', phone: '555-0102', role: 'Structural', isAdmin: false },
@@ -40,7 +53,9 @@ function seed() {
         createdBy: 1,
         startDate: '2026-03-01',
         endDate: '2026-12-15',
-        stage: 'Construction'
+        stage: 'Construction',
+        color: PROJECT_COLOR_PALETTE[0],
+        progress: 60
       },
       {
         id: 2,
@@ -49,7 +64,9 @@ function seed() {
         createdBy: 1,
         startDate: '2026-06-01',
         endDate: '2027-02-28',
-        stage: 'Design'
+        stage: 'Design',
+        color: PROJECT_COLOR_PALETTE[1],
+        progress: 20
       }
     ],
     tasks: [
@@ -132,6 +149,18 @@ function backfillSchema(data) {
     data.roles = DEFAULT_ROLES.slice();
     changed = true;
   }
+  if (!Array.isArray(data.stages)) {
+    data.stages = DEFAULT_STAGES.slice();
+    changed = true;
+  }
+  if (!Array.isArray(data.taskStatuses)) {
+    data.taskStatuses = DEFAULT_TASK_STATUSES.slice();
+    changed = true;
+  }
+  if (!Array.isArray(data.externalContactCategories)) {
+    data.externalContactCategories = DEFAULT_EXTERNAL_CONTACT_CATEGORIES.slice();
+    changed = true;
+  }
   for (const [collectionKey, idKey] of Object.entries(COLLECTIONS)) {
     if (!Array.isArray(data[collectionKey])) {
       data[collectionKey] = [];
@@ -142,6 +171,20 @@ function backfillSchema(data) {
       data.nextIds[idKey] = maxId + 1;
       changed = true;
     }
+  }
+  // Projects created before the Portfolio Timeline color/progress feature won't
+  // have these fields yet — backfill so every bar still renders correctly.
+  if (Array.isArray(data.projects)) {
+    data.projects.forEach((p, index) => {
+      if (!p.color) {
+        p.color = PROJECT_COLOR_PALETTE[index % PROJECT_COLOR_PALETTE.length];
+        changed = true;
+      }
+      if (typeof p.progress !== 'number') {
+        p.progress = 0;
+        changed = true;
+      }
+    });
   }
   return changed;
 }
@@ -170,4 +213,8 @@ function nextId(kind) {
   return id;
 }
 
-module.exports = { load, save, nextId, DEFAULT_ROLES, STAGES, TASK_STATUSES, DATA_DIR };
+module.exports = {
+  load, save, nextId,
+  DEFAULT_ROLES, DEFAULT_STAGES, DEFAULT_TASK_STATUSES, DEFAULT_EXTERNAL_CONTACT_CATEGORIES,
+  PROJECT_COLOR_PALETTE, DATA_DIR
+};
