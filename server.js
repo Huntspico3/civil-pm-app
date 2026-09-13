@@ -104,6 +104,28 @@ function canSeeProject(user, project, tasks) {
 const HEX_COLOR_RE = /^#[0-9a-fA-F]{6}$/;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
+// Progress is computed live from task statuses rather than cached, so a task
+// status change anywhere in the app is reflected the next time progress is read
+// — no event wiring needed. The last entry in data.taskStatuses (the rightmost
+// Kanban column) is treated as "done", so this still works if an admin renames it.
+function computeAutoProgress(projectId, data) {
+  const projectTasks = data.tasks.filter(t => t.projectId === projectId);
+  if (projectTasks.length === 0) return { progress: 0, done: 0, total: 0 };
+  const doneStatus = data.taskStatuses[data.taskStatuses.length - 1];
+  const done = projectTasks.filter(t => t.status === doneStatus).length;
+  return { progress: Math.round((done / projectTasks.length) * 100), done, total: projectTasks.length };
+}
+
+// A project stays on auto-calculated progress until a user drags its bar (or
+// types a value) to set a manual override; that override sticks until they
+// explicitly reset it back to automatic — a task status change alone does not
+// clear it, so a deliberate override isn't silently undone by routine work.
+function withComputedProgress(project, data) {
+  const auto = computeAutoProgress(project.id, data);
+  const progress = project.progressMode === 'manual' ? project.progress : auto.progress;
+  return { ...project, progress, taskProgress: { done: auto.done, total: auto.total } };
+}
+
 // --- admin-editable option lists (roles, stages, task statuses, external contact
 // categories) — all managed the same way from the Settings page. `usageParts`
 // returns human-readable counts of what currently uses a given option, so removal
@@ -196,7 +218,7 @@ app.get('/api/projects', requireAuth, (req, res) => {
   const withCounts = visible.map(p => {
     const tasks = data.tasks.filter(t => t.projectId === p.id);
     return {
-      ...p,
+      ...withComputedProgress(p, data),
       taskCount: tasks.length,
       myTaskCount: tasks.filter(t => t.assigneeId === req.user.id).length
     };
@@ -228,11 +250,12 @@ app.post('/api/projects', requireAuth, (req, res) => {
     endDate: endDate || defaultEnd,
     stage: stage || data.stages[0],
     color: color || db.PROJECT_COLOR_PALETTE[data.projects.length % db.PROJECT_COLOR_PALETTE.length],
-    progress: progress !== undefined ? progress : 0
+    progress: progress !== undefined ? progress : 0,
+    progressMode: progress !== undefined ? 'manual' : 'auto'
   };
   data.projects.push(project);
   db.save(data);
-  res.status(201).json(project);
+  res.status(201).json(withComputedProgress(project, data));
 });
 
 app.get('/api/projects/:id', requireAuth, (req, res) => {
@@ -240,7 +263,7 @@ app.get('/api/projects/:id', requireAuth, (req, res) => {
   const project = data.projects.find(p => p.id === Number(req.params.id));
   if (!project) return res.status(404).json({ error: 'Project not found' });
   if (!canSeeProject(req.user, project, data.tasks)) return res.status(403).json({ error: 'Not visible to you' });
-  res.json(project);
+  res.json(withComputedProgress(project, data));
 });
 
 app.patch('/api/projects/:id', requireAuth, (req, res) => {
@@ -251,7 +274,7 @@ app.patch('/api/projects/:id', requireAuth, (req, res) => {
   const canEdit = req.user.isAdmin || project.createdBy === req.user.id;
   if (!canEdit) return res.status(403).json({ error: 'Only an admin or this project\'s creator can edit it' });
 
-  const { color, progress, startDate, endDate } = req.body;
+  const { color, progress, progressMode, startDate, endDate } = req.body;
   if (color !== undefined) {
     if (!HEX_COLOR_RE.test(color)) return res.status(400).json({ error: 'Color must be a hex value like #2563eb' });
     project.color = color;
@@ -261,6 +284,13 @@ app.patch('/api/projects/:id', requireAuth, (req, res) => {
       return res.status(400).json({ error: 'Progress must be a number between 0 and 100' });
     }
     project.progress = progress;
+    project.progressMode = 'manual';
+  }
+  if (progressMode !== undefined) {
+    if (progressMode !== 'auto' && progressMode !== 'manual') {
+      return res.status(400).json({ error: 'progressMode must be "auto" or "manual"' });
+    }
+    project.progressMode = progressMode;
   }
   if (startDate !== undefined || endDate !== undefined) {
     const nextStart = startDate !== undefined ? startDate : project.startDate;
@@ -276,7 +306,7 @@ app.patch('/api/projects/:id', requireAuth, (req, res) => {
   }
 
   db.save(data);
-  res.json(project);
+  res.json(withComputedProgress(project, data));
 });
 
 // --- tasks ---
@@ -675,6 +705,7 @@ app.get('/api/portfolio', requireAuth, (req, res) => {
     const team = assigneeIds
       .map(id => data.users.find(u => u.id === id))
       .filter(Boolean);
+    const enriched = withComputedProgress(p, data);
     return {
       id: p.id,
       name: p.name,
@@ -683,7 +714,9 @@ app.get('/api/portfolio', requireAuth, (req, res) => {
       endDate: p.endDate,
       stage: p.stage,
       color: p.color,
-      progress: p.progress,
+      progress: enriched.progress,
+      progressMode: p.progressMode,
+      taskProgress: enriched.taskProgress,
       createdBy: p.createdBy,
       team
     };

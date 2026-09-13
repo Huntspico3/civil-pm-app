@@ -55,7 +55,8 @@ function seed() {
         endDate: '2026-12-15',
         stage: 'Construction',
         color: PROJECT_COLOR_PALETTE[0],
-        progress: 60
+        progress: 60,
+        progressMode: 'auto'
       },
       {
         id: 2,
@@ -66,7 +67,8 @@ function seed() {
         endDate: '2027-02-28',
         stage: 'Design',
         color: PROJECT_COLOR_PALETTE[1],
-        progress: 20
+        progress: 20,
+        progressMode: 'auto'
       }
     ],
     tasks: [
@@ -182,6 +184,12 @@ function backfillSchema(data) {
       }
       if (typeof p.progress !== 'number') {
         p.progress = 0;
+        changed = true;
+      }
+      if (p.progressMode !== 'auto' && p.progressMode !== 'manual') {
+        // Existing projects predate auto-calculated progress — default them to
+        // automatic so progress reflects real task completion going forward.
+        p.progressMode = 'auto';
         changed = true;
       }
     });

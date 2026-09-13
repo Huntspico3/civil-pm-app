@@ -645,6 +645,8 @@ async function renderProjectDetail(main, projectId) {
     <button class="back-link" id="back-to-projects">&larr; Back to Projects</button>
     <h1>${escapeHtml(project.name)}</h1>
     <p class="subtitle">${escapeHtml(project.description || '')}</p>
+    <div class="gantt-progress-track" style="max-width:260px;"><div class="gantt-progress-fill" style="width:${project.progress || 0}%; background:${project.color || '#2563eb'};"></div></div>
+    <p class="hint">${project.progress || 0}% complete${project.progressMode === 'manual' ? ' (manual override)' : ` (auto — ${project.taskProgress ? project.taskProgress.done : 0} of ${project.taskProgress ? project.taskProgress.total : 0} tasks done)`}</p>
     ${projectTabsHtml('project')}
 
     <div class="card">
@@ -1541,6 +1543,11 @@ function showProjectModal(project, boardMain) {
   const canEdit = state.me.isAdmin || project.createdBy === state.me.id;
   const color = project.color || '#2563eb';
   const progress = project.progress || 0;
+  const isManualProgress = project.progressMode === 'manual';
+  const taskProgress = project.taskProgress || { done: 0, total: 0 };
+  const progressHint = isManualProgress
+    ? 'Manually set — overrides the automatic calculation.'
+    : `Calculated automatically: ${taskProgress.done} of ${taskProgress.total} task${taskProgress.total === 1 ? '' : 's'} done.`;
 
   const teamHtml = project.team.length === 0
     ? `<p class="hint">No team members assigned yet.</p>`
@@ -1563,6 +1570,7 @@ function showProjectModal(project, boardMain) {
           <input type="number" id="project-modal-progress" min="0" max="100" step="1" value="${progress}" />
         </div>
       </div>
+      <p class="hint">${escapeHtml(progressHint)}${isManualProgress ? ' <button class="btn small secondary" id="project-modal-reset-progress" type="button">Reset to Automatic</button>' : ''}</p>
       <div id="project-modal-error" class="error-text"></div>
     `
     : `
@@ -1570,6 +1578,7 @@ function showProjectModal(project, boardMain) {
         <div><label>Color</label><div><span style="display:inline-block; width:14px; height:14px; border-radius:3px; background:${color}; vertical-align:middle;"></span></div></div>
         <div><label>Progress</label><div>${progress}%</div></div>
       </div>
+      <p class="hint">${escapeHtml(progressHint)}</p>
     `;
 
   modalRoot.innerHTML = `
@@ -1624,6 +1633,19 @@ function showProjectModal(project, boardMain) {
         errBox.textContent = err.message;
       }
     });
+
+    const resetBtn = document.getElementById('project-modal-reset-progress');
+    if (resetBtn) {
+      resetBtn.addEventListener('click', async () => {
+        errBox.textContent = '';
+        try {
+          await api('/projects/' + project.id, { method: 'PATCH', body: JSON.stringify({ progressMode: 'auto' }) });
+          renderPortfolio(boardMain);
+        } catch (err) {
+          errBox.textContent = err.message;
+        }
+      });
+    }
   }
 }
 
