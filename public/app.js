@@ -56,6 +56,40 @@ function escapeHtml(str) {
   return String(str).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
+// A friendly icon + message for any list/page with nothing to show yet, used
+// consistently everywhere instead of a bare line of text.
+function emptyStateHtml(message) {
+  return `
+    <div class="empty-state">
+      <svg class="empty-state-icon" viewBox="0 0 24 24"><path d="M3 7l2.5-3.5h13L21 7"/><path d="M3 7v12a1.5 1.5 0 0 0 1.5 1.5h15A1.5 1.5 0 0 0 21 19V7"/><path d="M3 7h18"/><path d="M9 11.5a3 3 0 0 0 6 0"/></svg>
+      <p>${escapeHtml(message)}</p>
+    </div>
+  `;
+}
+
+// Same empty state, sized to sit inside a table row.
+function emptyStateRowHtml(message, colspan) {
+  return `<tr><td colspan="${colspan}">${emptyStateHtml(message)}</td></tr>`;
+}
+
+const STAT_ICONS = {
+  tasks: '<svg viewBox="0 0 24 24"><path d="M9 6h11M9 12h11M9 18h11"/><path d="M4 6l1.4 1.4L8 4.8"/><path d="M4 12l1.4 1.4L8 10.8"/><path d="M4 18l1.4 1.4L8 16.8"/></svg>',
+  rfi: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.5 9a2.5 2.5 0 1 1 3.5 2.3c-.9.5-1.5 1.1-1.5 2.2"/><path d="M12 17h.01"/></svg>',
+  calendar: '<svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 9h18M8 3v4M16 3v4"/></svg>',
+  folder: '<svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/></svg>',
+  team: '<svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3"/><path d="M2.5 20c.9-3.2 3.4-5 6.5-5s5.6 1.8 6.5 5"/><circle cx="17" cy="9" r="2.2"/><path d="M15 14.2c2.4.4 4 1.8 4.6 4"/></svg>'
+};
+
+function statCardHtml(iconKey, value, label) {
+  return `
+    <div class="stat-card">
+      <div class="stat-icon">${STAT_ICONS[iconKey] || ''}</div>
+      <div class="stat-value">${value}</div>
+      <div class="stat-label">${escapeHtml(label)}</div>
+    </div>
+  `;
+}
+
 function start() {
   if (!state.gateToken) {
     renderGateScreen();
@@ -320,7 +354,7 @@ async function renderExternalContacts(main) {
   }
 
   const rows = contacts.length === 0
-    ? `<tr><td colspan="6" class="empty-state">No external contacts yet.</td></tr>`
+    ? emptyStateRowHtml('No external contacts yet.', 6)
     : contacts.map(c => `
         <tr>
           <td>${escapeHtml(c.name)}</td>
@@ -348,13 +382,31 @@ async function renderExternalContacts(main) {
 
 async function renderDashboard(main) {
   main.innerHTML = `<h1>Dashboard</h1><p class="subtitle">Loading…</p>`;
-  let tasks;
+  let tasks, stats;
   try {
     tasks = await api('/dashboard');
+    stats = await api('/dashboard-stats');
   } catch (e) {
     main.innerHTML = `<h1>Dashboard</h1><p class="error-text">${escapeHtml(e.message)}</p>`;
     return;
   }
+
+  const statsHtml = stats.role === 'admin'
+    ? `
+      <div class="stat-grid">
+        ${statCardHtml('folder', stats.activeProjects, 'Active Projects')}
+        ${statCardHtml('tasks', stats.tasksAcrossTeam, 'Tasks Across Team')}
+        ${statCardHtml('rfi', stats.openRfisOrgWide, 'Open RFIs (Org-wide)')}
+        ${statCardHtml('team', stats.totalProjects, 'Total Projects')}
+      </div>
+    `
+    : `
+      <div class="stat-grid">
+        ${statCardHtml('tasks', stats.myOpenTasks, 'My Open Tasks')}
+        ${statCardHtml('rfi', stats.myOpenRfis, 'My Open RFIs')}
+        ${statCardHtml('calendar', stats.dueSoonOrOverdue, 'Due This Week')}
+      </div>
+    `;
 
   const groupBy = state.dashboardGroupBy;
   const groups = new Map();
@@ -367,7 +419,7 @@ async function renderDashboard(main) {
   });
 
   const groupsHtml = tasks.length === 0
-    ? `<p class="empty-state">No tasks to show yet.</p>`
+    ? emptyStateHtml('No tasks to show yet.')
     : Array.from(groups.entries()).map(([key, list]) => `
         <div class="group-title">${escapeHtml(key)}</div>
         <div class="card">
@@ -391,6 +443,8 @@ async function renderDashboard(main) {
   main.innerHTML = `
     <h1>Dashboard</h1>
     <p class="subtitle">${state.me.isAdmin ? 'All projects and tasks across the org.' : 'Tasks assigned to you (and any projects you created).'}</p>
+    ${statsHtml}
+    <h2>Task Summary</h2>
     <div class="dash-toggle">
       <button class="btn ${groupBy === 'project' ? '' : 'secondary'}" data-group="project">Group by Project</button>
       <button class="btn ${groupBy === 'assignee' ? '' : 'secondary'}" data-group="assignee">Group by Assignee</button>
@@ -428,7 +482,7 @@ async function renderMyTasks(main) {
     <div class="card">
       <h2>${state.me.isAdmin && user.id !== state.me.id ? `${escapeHtml(user.name)}'s` : 'My'} Open RFIs</h2>
       ${openRfis.length === 0
-        ? '<p class="empty-state">Nothing waiting — no open RFIs assigned.</p>'
+        ? emptyStateHtml('Nothing waiting — no open RFIs assigned.')
         : openRfis.map(r => `
             <div class="rfi-card">
               <div class="rfi-question">${escapeHtml(r.question)}</div>
@@ -461,7 +515,7 @@ async function renderMyTasks(main) {
   });
 
   const groupsHtml = tasks.length === 0
-    ? `<p class="empty-state">${escapeHtml(user.name)} has no assigned tasks.</p>`
+    ? emptyStateHtml(`${user.name} has no assigned tasks.`)
     : Array.from(groups.entries()).map(([projectName, list]) => `
         <div class="group-title">${escapeHtml(projectName)}</div>
         <div class="card">
@@ -510,7 +564,7 @@ async function renderProjects(main) {
   }
 
   const cardsHtml = projects.length === 0
-    ? `<p class="empty-state">No projects visible to you yet.</p>`
+    ? emptyStateHtml('No projects visible to you yet.')
     : `<div class="grid">${projects.map(p => `
         <div class="card project-card" data-project="${p.id}">
           <h3>${escapeHtml(p.name)}</h3>
@@ -634,7 +688,7 @@ async function renderProjectDetail(main, projectId) {
   }
 
   const taskRows = tasks.length === 0
-    ? `<tr><td colspan="5" class="empty-state">No tasks yet.</td></tr>`
+    ? emptyStateRowHtml('No tasks yet.', 5)
     : tasks.map(t => {
         const canReassign = isManager;
         const canChangeStatus = isManager || t.assigneeId === state.me.id;
@@ -701,7 +755,7 @@ async function renderProjectDetail(main, projectId) {
     <div class="card">
       <h2>Field Reports</h2>
       ${fieldReports.length === 0
-        ? '<p class="empty-state">No approved offsite reports for this project yet.</p>'
+        ? emptyStateHtml('No approved offsite reports for this project yet.')
         : `<table>
             <thead><tr><th>Date</th><th>Submitted By</th><th>Photos</th><th></th></tr></thead>
             <tbody>
@@ -989,7 +1043,7 @@ async function renderProjectRfis(main, projectId) {
   const userOptions = state.users.map(u => `<option value="${u.id}">${escapeHtml(u.name)}</option>`).join('');
 
   const rfiCardsHtml = rfis.length === 0
-    ? '<p class="empty-state">No RFIs for this project yet.</p>'
+    ? emptyStateHtml('No RFIs for this project yet.')
     : rfis.map(r => {
         const canAnswer = r.status === 'Open' && (isManager || r.assignedTo === state.me.id);
         const answerBlockHtml = r.status === 'Answered'
@@ -1304,7 +1358,7 @@ async function renderPortfolio(main) {
   }
 
   if (projects.length === 0) {
-    main.innerHTML = `<h1>Portfolio Timeline</h1><p class="empty-state">No projects yet.</p>`;
+    main.innerHTML = `<h1>Portfolio Timeline</h1>${emptyStateHtml('No projects yet.')}`;
     return;
   }
 
@@ -1697,7 +1751,7 @@ async function renderOffsiteReports(main) {
       <h2>Pending Draft Reports</h2>
       <p class="hint">Review the AI-drafted report, edit if needed, then approve.</p>
       ${pendingReports.length === 0
-        ? '<p class="empty-state">No draft reports waiting for review.</p>'
+        ? emptyStateHtml('No draft reports waiting for review.')
         : `<table>
             <thead><tr><th>Project</th><th>Submitted By</th><th>Date</th><th>Photos</th><th></th></tr></thead>
             <tbody>
@@ -1719,7 +1773,7 @@ async function renderOffsiteReports(main) {
     <div class="card">
       <h2>My Submitted Reports</h2>
       ${myReports.length === 0
-        ? '<p class="empty-state">You haven\'t submitted any offsite reports yet.</p>'
+        ? emptyStateHtml('You haven\'t submitted any offsite reports yet.')
         : `<table>
             <thead><tr><th>Project</th><th>Date</th><th>Status</th><th></th></tr></thead>
             <tbody>

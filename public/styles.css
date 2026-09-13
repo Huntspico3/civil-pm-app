@@ -216,6 +216,7 @@ h3 { font-size: 0.95rem; font-weight: 700; margin: 0 0 0.6rem; }
 
 .project-card { cursor: pointer; transition: box-shadow 0.15s ease, transform 0.15s ease, border-color 0.15s ease; }
 .project-card:hover { box-shadow: var(--shadow-md); border-color: var(--border-strong); transform: translateY(-1px); }
+.project-card:active { transform: translateY(0) scale(0.99); }
 .project-card h3 { margin: 0 0 0.4rem; font-size: 1.02rem; font-weight: 700; }
 .project-card p { margin: 0 0 0.7rem; color: var(--text-muted); font-size: 0.88rem; }
 .project-card .meta { font-size: 0.8rem; color: var(--text-muted); display: flex; gap: 0.75rem; flex-wrap: wrap; align-items: center; }
@@ -342,6 +343,7 @@ tbody tr:hover td { background: var(--primary-light); }
   transition: border-color 0.12s ease, background 0.12s ease;
 }
 .user-pick:hover { border-color: var(--primary); background: var(--primary-light); }
+.user-pick:active { transform: scale(0.99); }
 .user-pick .info { display: flex; flex-direction: column; }
 .user-pick .info .email { font-size: 0.78rem; color: var(--text-muted); }
 
@@ -589,6 +591,7 @@ body.gantt-dragging { user-select: none; }
   transition: box-shadow 0.12s ease, border-color 0.12s ease;
 }
 .board-card:hover { border-color: var(--primary); box-shadow: var(--shadow); }
+.board-card:active { transform: scale(0.99); }
 .board-card[draggable="true"] { cursor: grab; }
 .board-card.dragging { opacity: 0.4; }
 
@@ -619,3 +622,98 @@ body.gantt-dragging { user-select: none; }
 .option-row { display: flex; align-items: center; gap: 0.5rem; background: var(--bg); border: 1px solid var(--border); border-radius: 999px; padding: 0.3rem 0.45rem 0.3rem 0.8rem; }
 .option-list-section { margin-bottom: 1.6rem; }
 .option-list-section:last-child { margin-bottom: 0; }
+
+/* ============ DASHBOARD STAT CARDS ============ */
+
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 1rem;
+  margin-bottom: 1.75rem;
+}
+
+.stat-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+  padding: 1.15rem 1.3rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  transition: box-shadow 0.15s ease, transform 0.15s ease;
+}
+.stat-card:hover { box-shadow: var(--shadow-md); transform: translateY(-1px); }
+
+.stat-icon {
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+  background: var(--primary-light);
+  color: var(--primary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.stat-icon svg {
+  width: 18px;
+  height: 18px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.stat-value { font-size: 1.75rem; font-weight: 800; letter-spacing: -0.02em; line-height: 1; }
+.stat-label { font-size: 0.79rem; color: var(--text-muted); font-weight: 600; }
+
+/* ============ EMPTY STATES ============ */
+
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.7rem;
+  padding: 2.4rem 1rem;
+  color: var(--text-muted);
+  text-align: center;
+  animation: fadeSlideIn 0.3s ease;
+}
+.empty-state-icon {
+  width: 42px;
+  height: 42px;
+  stroke: var(--text-muted);
+  fill: none;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: 0.45;
+}
+.empty-state p { margin: 0; font-size: 0.88rem; font-weight: 500; }
+
+/* ============ TRANSITIONS & MOTION ============ */
+
+@keyframes fadeSlideIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* .main-content-inner is rebuilt from scratch on every navigation (see
+   render()), so this plays once per page switch automatically. Card-level
+   selectors replay too whenever a list refreshes in place (e.g. toggling
+   "Group by Assignee"), since those elements are freshly created each time. */
+.main-content-inner { animation: fadeSlideIn 0.22s ease; }
+
+.card, .stat-card, .project-card, .board-card, .rfi-card, .user-pick, .modal-card {
+  animation: fadeSlideIn 0.28s ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .main-content-inner,
+  .card, .stat-card, .project-card, .board-card, .rfi-card, .user-pick, .modal-card,
+  .empty-state {
+    animation: none;
+  }
+}

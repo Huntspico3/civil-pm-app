@@ -417,6 +417,34 @@ app.get('/api/dashboard', requireAuth, (req, res) => {
   res.json(enriched);
 });
 
+// --- dashboard summary stats: tailored to admin (org-wide) vs a regular member (their own) ---
+app.get('/api/dashboard-stats', requireAuth, (req, res) => {
+  const data = db.load();
+  const doneStatus = data.taskStatuses[data.taskStatuses.length - 1];
+
+  if (req.user.isAdmin) {
+    const finalStage = data.stages[data.stages.length - 1];
+    return res.json({
+      role: 'admin',
+      totalProjects: data.projects.length,
+      activeProjects: data.projects.filter(p => p.stage !== finalStage).length,
+      tasksAcrossTeam: data.tasks.length,
+      openRfisOrgWide: data.rfis.filter(r => !r.answer).length
+    });
+  }
+
+  const myTasks = data.tasks.filter(t => t.assigneeId === req.user.id);
+  const myOpenRfis = data.rfis.filter(r => r.assignedTo === req.user.id && !r.answer);
+  const soon = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+
+  res.json({
+    role: 'member',
+    myOpenTasks: myTasks.filter(t => t.status !== doneStatus).length,
+    myOpenRfis: myOpenRfis.length,
+    dueSoonOrOverdue: myOpenRfis.filter(r => r.dueDate <= soon).length
+  });
+});
+
 // --- my tasks (a user's tasks across every project; admins can view any team member's) ---
 app.get('/api/my-tasks', requireAuth, (req, res) => {
   const data = db.load();
