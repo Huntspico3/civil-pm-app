@@ -96,7 +96,7 @@ function renderGateScreen(errorMessage) {
   root.innerHTML = `
     <div class="login-wrap">
       <div class="login-card">
-        <h1>Civil <span style="color:#2563eb">PM</span></h1>
+        <h1>Civil <span style="color:#1e3a5f">PM</span></h1>
         <p class="subtitle">Enter the shared access password to continue.</p>
         <form id="gate-form">
           <div><label>Password</label><input name="password" type="password" required autofocus /></div>
@@ -183,7 +183,7 @@ function renderLogin() {
   return `
     <div class="login-wrap">
       <div class="login-card">
-        <h1>Civil <span style="color:#2563eb">PM</span></h1>
+        <h1>Civil <span style="color:#1e3a5f">PM</span></h1>
         <p class="subtitle">Pick a team member to log in as (demo auth — no password for v1).</p>
         ${items}
       </div>
@@ -198,6 +198,18 @@ function bindLogin() {
 }
 
 // ---------------- SHELL ----------------
+
+const NAV_ICONS = {
+  'dashboard': '<svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>',
+  'my-tasks': '<svg viewBox="0 0 24 24"><path d="M9 6h11M9 12h11M9 18h11"/><path d="M4 6l1.4 1.4L8 4.8"/><path d="M4 12l1.4 1.4L8 10.8"/><path d="M4 18l1.4 1.4L8 16.8"/></svg>',
+  'projects': '<svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/></svg>',
+  'portfolio': '<svg viewBox="0 0 24 24"><path d="M4 20V10M12 20V4M20 20v-7"/></svg>',
+  'offsite-reports': '<svg viewBox="0 0 24 24"><path d="M4 8h3l1.5-2h7L17 8h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"/><circle cx="12" cy="13" r="3.4"/></svg>',
+  'contacts': '<svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.2"/><path d="M5 20c1.2-3.4 4-5 7-5s5.8 1.6 7 5"/></svg>',
+  'external-contacts': '<svg viewBox="0 0 24 24"><path d="M5 21V5a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v16"/><path d="M13 21V9a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v12"/><path d="M8 8h.01M8 11h.01M8 14h.01M16 12h.01M16 15h.01"/></svg>',
+  'team': '<svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3"/><path d="M2.5 20c.9-3.2 3.4-5 6.5-5s5.6 1.8 6.5 5"/><circle cx="17" cy="9" r="2.2"/><path d="M15 14.2c2.4.4 4 1.8 4.6 4"/></svg>',
+  'settings': '<svg viewBox="0 0 24 24"><path d="M10.3 2.5h3.4l.5 2.4a7.6 7.6 0 0 1 2 1.2l2.3-.9 1.7 3-1.9 1.5c.1.4.1.8.1 1.3s0 .9-.1 1.3l1.9 1.5-1.7 3-2.3-.9a7.6 7.6 0 0 1-2 1.2l-.5 2.4h-3.4l-.5-2.4a7.6 7.6 0 0 1-2-1.2l-2.3.9-1.7-3 1.9-1.5A7 7 0 0 1 5.6 12c0-.5 0-.9.1-1.3L3.8 9.2l1.7-3 2.3.9a7.6 7.6 0 0 1 2-1.2z"/><circle cx="12" cy="12" r="3"/></svg>'
+};
 
 function renderShell() {
   const nav = [
@@ -214,22 +226,30 @@ function renderShell() {
 
   const navHtml = nav.map(n => `
     <button data-nav="${n.key}" class="${state.view === n.key || (n.key === 'projects' && ['project', 'project-board', 'project-rfis'].includes(state.view)) ? 'active' : ''}">
-      ${n.label}${n.key === 'my-tasks' && state.myOpenRfiCount > 0 ? `<span class="nav-badge" title="Open RFIs waiting on you">${state.myOpenRfiCount}</span>` : ''}
+      ${NAV_ICONS[n.key] || ''}
+      <span class="nav-label">${n.label}</span>
+      ${n.key === 'my-tasks' && state.myOpenRfiCount > 0 ? `<span class="nav-badge" title="Open RFIs waiting on you">${state.myOpenRfiCount}</span>` : ''}
     </button>
   `).join('');
 
   return `
-    <div class="topbar">
-      <div class="brand">Civil <span>PM</span></div>
-      <nav>${navHtml}</nav>
-      <div class="who">
-        <span class="badge role-${state.me.role}">${state.me.role}</span>
-        ${state.me.isAdmin ? '<span class="badge admin">Admin</span>' : ''}
-        <span class="name">${escapeHtml(state.me.name)}</span>
-        <button class="switch" id="switch-user">Switch user</button>
-      </div>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="sidebar-brand"><span class="brand-mark">CP</span>Civil <span>PM</span></div>
+        <nav class="sidebar-nav">${navHtml}</nav>
+        <div class="sidebar-footer">
+          <div>
+            <div class="sidebar-user-name">${escapeHtml(state.me.name)}</div>
+            <div class="sidebar-user-badges">
+              <span class="badge role-${state.me.role}">${state.me.role}</span>
+              ${state.me.isAdmin ? '<span class="badge admin">Admin</span>' : ''}
+            </div>
+          </div>
+          <button class="switch" id="switch-user">Switch user</button>
+        </div>
+      </aside>
+      <main id="main-content" class="main-content"><div class="main-content-inner"></div></main>
     </div>
-    <main id="main-content"></main>
   `;
 }
 
@@ -239,7 +259,7 @@ function bindShell() {
   });
   root.querySelector('#switch-user').addEventListener('click', logout);
 
-  const main = root.querySelector('#main-content');
+  const main = root.querySelector('.main-content-inner');
   if (state.view === 'dashboard') renderDashboard(main);
   else if (state.view === 'projects') renderProjects(main);
   else if (state.view === 'project') renderProjectDetail(main, state.activeProjectId);
@@ -645,7 +665,7 @@ async function renderProjectDetail(main, projectId) {
     <button class="back-link" id="back-to-projects">&larr; Back to Projects</button>
     <h1>${escapeHtml(project.name)}</h1>
     <p class="subtitle">${escapeHtml(project.description || '')}</p>
-    <div class="gantt-progress-track" style="max-width:260px;"><div class="gantt-progress-fill" style="width:${project.progress || 0}%; background:${project.color || '#2563eb'};"></div></div>
+    <div class="gantt-progress-track" style="max-width:260px;"><div class="gantt-progress-fill" style="width:${project.progress || 0}%; background:${project.color || '#1e3a5f'};"></div></div>
     <p class="hint">${project.progress || 0}% complete${project.progressMode === 'manual' ? ' (manual override)' : ` (auto — ${project.taskProgress ? project.taskProgress.done : 0} of ${project.taskProgress ? project.taskProgress.total : 0} tasks done)`}</p>
     ${projectTabsHtml('project')}
 
@@ -1317,7 +1337,7 @@ async function renderPortfolio(main) {
     const left = pct(startMs);
     const width = Math.max(pct(endMs) - left, 1.5);
     const progress = p.progress || 0;
-    const color = p.color || '#2563eb';
+    const color = p.color || '#1e3a5f';
     const canEdit = state.me.isAdmin || p.createdBy === state.me.id;
     const handlesHtml = canEdit
       ? `<div class="gantt-bar-handle gantt-bar-handle-start" data-resize="start"></div><div class="gantt-bar-handle gantt-bar-handle-end" data-resize="end"></div>`
@@ -1541,7 +1561,7 @@ function showProjectModal(project, boardMain) {
   if (!modalRoot) return;
 
   const canEdit = state.me.isAdmin || project.createdBy === state.me.id;
-  const color = project.color || '#2563eb';
+  const color = project.color || '#1e3a5f';
   const progress = project.progress || 0;
   const isManualProgress = project.progressMode === 'manual';
   const taskProgress = project.taskProgress || { done: 0, total: 0 };
