@@ -1316,18 +1316,23 @@ async function renderPortfolio(main) {
     const width = Math.max(pct(endMs) - left, 1.5);
     const progress = p.progress || 0;
     const color = p.color || '#2563eb';
+    const canEdit = state.me.isAdmin || p.createdBy === state.me.id;
+    const handlesHtml = canEdit
+      ? `<div class="gantt-bar-handle gantt-bar-handle-start" data-resize="start"></div><div class="gantt-bar-handle gantt-bar-handle-end" data-resize="end"></div>`
+      : '';
     return `
       <div class="gantt-row">
         <div class="gantt-label">
           <div>${escapeHtml(p.name)}</div>
           <span class="badge stage-${p.stage}">${p.stage}</span>
           <div class="gantt-progress-track"><div class="gantt-progress-fill" style="width:${progress}%; background:${color};"></div></div>
-          <span class="hint">${progress}% complete</span>
+          <span class="hint gantt-progress-pct">${progress}% complete</span>
         </div>
         <div class="gantt-track">
-          <div class="gantt-bar" data-project="${p.id}" style="left:${left}%; width:${width}%; background:${color};" title="${escapeHtml(p.name)} — ${progress}% complete">
+          <div class="gantt-bar${canEdit ? ' gantt-bar-draggable' : ''}" data-project="${p.id}" style="left:${left}%; width:${width}%; background:${color};" title="${escapeHtml(p.name)} — ${progress}% complete">
             <div class="gantt-bar-remaining" style="width:${100 - progress}%;"></div>
             <span class="gantt-bar-text">${escapeHtml(p.name)} · ${progress}%</span>
+            ${handlesHtml}
           </div>
         </div>
       </div>
@@ -1350,11 +1355,182 @@ async function renderPortfolio(main) {
     <div id="portfolio-modal-root"></div>
   `;
 
-  main.querySelectorAll('.gantt-bar').forEach(el => {
-    el.addEventListener('click', () => {
-      const project = projects.find(p => p.id === Number(el.dataset.project));
-      if (project) showProjectModal(project, main);
-    });
+  bindGanttBarInteractions(main, projects, rangeMin, rangeSpan);
+}
+
+const GANTT_DAY_MS = 24 * 60 * 60 * 1000;
+
+function ganttFormatShort(ms) {
+  return new Date(ms).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+}
+
+function ganttMsToIsoDate(ms) {
+  return new Date(ms).toISOString().slice(0, 10);
+}
+
+// Wires up click-to-view, drag-edge-to-resize dates, and drag-the-body-to-set-
+// progress on each bar. A plain click (no meaningful mouse movement) still opens
+// the details modal; only once the user actually drags do we save anything.
+function bindGanttBarInteractions(main, projects, rangeMin, rangeSpan) {
+  const pct = (time) => ((time - rangeMin) / rangeSpan) * 100;
+
+  main.querySelectorAll('.gantt-bar').forEach(bar => {
+    const project = projects.find(p => p.id === Number(bar.dataset.project));
+    if (!project) return;
+
+    if (!bar.classList.contains('gantt-bar-draggable')) {
+      bar.addEventListener('click', () => showProjectModal(project, main));
+      return;
+    }
+
+    const track = bar.closest('.gantt-track');
+    const row = bar.closest('.gantt-row');
+    const textEl = bar.querySelector('.gantt-bar-text');
+    const remainingEl = bar.querySelector('.gantt-bar-remaining');
+    const labelFillEl = row ? row.querySelector('.gantt-progress-fill') : null;
+    const labelPctEl = row ? row.querySelector('.gantt-progress-pct') : null;
+
+    // --- drag an edge handle: resize just that side's date, duration only ---
+    const beginResizeDrag = (mode) => (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+
+      const startX = e.clientX;
+      const trackWidth = track.getBoundingClientRect().width;
+      const origStartMs = new Date(project.startDate + 'T00:00:00').getTime();
+      const origEndMs = new Date(project.endDate + 'T00:00:00').getTime();
+      let dragged = false;
+      let newStartMs = origStartMs;
+      let newEndMs = origEndMs;
+
+      const tooltip = document.createElement('div');
+      tooltip.className = 'gantt-drag-tooltip';
+      document.body.appendChild(tooltip);
+      document.body.classList.add('gantt-dragging');
+
+      function updateTooltip(clientX, clientY) {
+        tooltip.style.left = clientX + 'px';
+        tooltip.style.top = (clientY - 36) + 'px';
+        tooltip.textContent = `${ganttFormatShort(newStartMs)} – ${ganttFormatShort(newEndMs)} · ${project.progress || 0}%`;
+      }
+
+      function onMove(ev) {
+        const dx = ev.clientX - startX;
+        if (Math.abs(dx) > 3) dragged = true;
+        if (!dragged) return;
+
+        const deltaMs = (dx / trackWidth) * rangeSpan;
+
+        if (mode === 'resize-start') {
+          newStartMs = Math.min(origStartMs + deltaMs, origEndMs - GANTT_DAY_MS);
+          newEndMs = origEndMs;
+        } else {
+          newEndMs = Math.max(origEndMs + deltaMs, origStartMs + GANTT_DAY_MS);
+          newStartMs = origStartMs;
+        }
+
+        const left = pct(newStartMs);
+        const width = Math.max(pct(newEndMs) - left, 1.5);
+        bar.style.left = left + '%';
+        bar.style.width = width + '%';
+        if (textEl) textEl.textContent = `${project.name} · ${project.progress || 0}%`;
+        updateTooltip(ev.clientX, ev.clientY);
+      }
+
+      async function onUp() {
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+        document.body.classList.remove('gantt-dragging');
+        tooltip.remove();
+
+        if (!dragged) {
+          showProjectModal(project, main);
+          return;
+        }
+
+        try {
+          await api('/projects/' + project.id, {
+            method: 'PATCH',
+            body: JSON.stringify({ startDate: ganttMsToIsoDate(newStartMs), endDate: ganttMsToIsoDate(newEndMs) })
+          });
+        } catch (err) {
+          alert(err.message);
+        }
+        renderPortfolio(main);
+      }
+
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+    };
+
+    // --- drag the bar body: set progress by how far across the bar the cursor is ---
+    function beginProgressDrag(e) {
+      e.preventDefault();
+      e.stopPropagation();
+
+      const barRect = bar.getBoundingClientRect();
+      const startX = e.clientX;
+      let dragged = false;
+      let newProgress = project.progress || 0;
+
+      const tooltip = document.createElement('div');
+      tooltip.className = 'gantt-drag-tooltip';
+      document.body.appendChild(tooltip);
+      document.body.classList.add('gantt-dragging');
+
+      function computeProgress(clientX) {
+        const relativeX = clientX - barRect.left;
+        return Math.max(0, Math.min(100, Math.round((relativeX / barRect.width) * 100)));
+      }
+
+      function updateVisual(clientX, clientY) {
+        if (remainingEl) remainingEl.style.width = (100 - newProgress) + '%';
+        if (textEl) textEl.textContent = `${project.name} · ${newProgress}%`;
+        if (labelFillEl) labelFillEl.style.width = newProgress + '%';
+        if (labelPctEl) labelPctEl.textContent = `${newProgress}% complete`;
+        tooltip.style.left = clientX + 'px';
+        tooltip.style.top = (clientY - 36) + 'px';
+        tooltip.textContent = `${newProgress}% complete`;
+      }
+
+      function onMove(ev) {
+        if (Math.abs(ev.clientX - startX) > 3) dragged = true;
+        if (!dragged) return;
+        newProgress = computeProgress(ev.clientX);
+        updateVisual(ev.clientX, ev.clientY);
+      }
+
+      async function onUp() {
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+        document.body.classList.remove('gantt-dragging');
+        tooltip.remove();
+
+        if (!dragged) {
+          showProjectModal(project, main);
+          return;
+        }
+
+        try {
+          await api('/projects/' + project.id, {
+            method: 'PATCH',
+            body: JSON.stringify({ progress: newProgress })
+          });
+        } catch (err) {
+          alert(err.message);
+        }
+        renderPortfolio(main);
+      }
+
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+    }
+
+    bar.addEventListener('mousedown', beginProgressDrag);
+    const startHandle = bar.querySelector('[data-resize="start"]');
+    const endHandle = bar.querySelector('[data-resize="end"]');
+    if (startHandle) startHandle.addEventListener('mousedown', beginResizeDrag('resize-start'));
+    if (endHandle) endHandle.addEventListener('mousedown', beginResizeDrag('resize-end'));
   });
 }
 

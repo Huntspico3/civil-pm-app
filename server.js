@@ -102,6 +102,7 @@ function canSeeProject(user, project, tasks) {
 }
 
 const HEX_COLOR_RE = /^#[0-9a-fA-F]{6}$/;
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 // --- admin-editable option lists (roles, stages, task statuses, external contact
 // categories) — all managed the same way from the Settings page. `usageParts`
@@ -250,7 +251,7 @@ app.patch('/api/projects/:id', requireAuth, (req, res) => {
   const canEdit = req.user.isAdmin || project.createdBy === req.user.id;
   if (!canEdit) return res.status(403).json({ error: 'Only an admin or this project\'s creator can edit it' });
 
-  const { color, progress } = req.body;
+  const { color, progress, startDate, endDate } = req.body;
   if (color !== undefined) {
     if (!HEX_COLOR_RE.test(color)) return res.status(400).json({ error: 'Color must be a hex value like #2563eb' });
     project.color = color;
@@ -260,6 +261,18 @@ app.patch('/api/projects/:id', requireAuth, (req, res) => {
       return res.status(400).json({ error: 'Progress must be a number between 0 and 100' });
     }
     project.progress = progress;
+  }
+  if (startDate !== undefined || endDate !== undefined) {
+    const nextStart = startDate !== undefined ? startDate : project.startDate;
+    const nextEnd = endDate !== undefined ? endDate : project.endDate;
+    if (!DATE_RE.test(nextStart) || !DATE_RE.test(nextEnd)) {
+      return res.status(400).json({ error: 'Dates must be in YYYY-MM-DD format' });
+    }
+    if (nextStart >= nextEnd) {
+      return res.status(400).json({ error: 'Start date must be before end date' });
+    }
+    project.startDate = nextStart;
+    project.endDate = nextEnd;
   }
 
   db.save(data);
