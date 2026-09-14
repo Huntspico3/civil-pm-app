@@ -337,9 +337,15 @@ app.post('/api/projects/:id/tasks', requireAuth, (req, res) => {
   if (!title || !requiredRole) return res.status(400).json({ error: 'title and requiredRole are required' });
   if (!data.roles.includes(requiredRole)) return res.status(400).json({ error: 'Invalid role' });
 
+  const isManager = req.user.isAdmin || project.createdBy === req.user.id;
+  const targetAssigneeId = assigneeId ? Number(assigneeId) : null;
+  if (!isManager && targetAssigneeId !== null && targetAssigneeId !== req.user.id) {
+    return res.status(403).json({ error: 'Only an admin or this project\'s manager can assign tasks to other team members — you can assign it to yourself instead.' });
+  }
+
   let assignee = null;
-  if (assigneeId) {
-    assignee = data.users.find(u => u.id === Number(assigneeId));
+  if (targetAssigneeId !== null) {
+    assignee = data.users.find(u => u.id === targetAssigneeId);
     if (!assignee) return res.status(400).json({ error: 'Assignee not found' });
   }
 
@@ -364,16 +370,23 @@ app.patch('/api/tasks/:id', requireAuth, (req, res) => {
   const project = data.projects.find(p => p.id === task.projectId);
   const isManager = req.user.isAdmin || project.createdBy === req.user.id;
   const isAssignee = task.assigneeId === req.user.id;
-  if (!isManager && !isAssignee) return res.status(403).json({ error: 'Not permitted to edit this task' });
-
   const { assigneeId, status, title, description, requiredRole } = req.body;
 
-  if (assigneeId !== undefined) {
-    if (!isManager) return res.status(403).json({ error: 'Only a project manager or admin can reassign tasks' });
-    if (assigneeId === null) {
+  // A non-manager may still assign a task to themselves (claiming unassigned
+  // work), so that alone must be enough to pass the general edit gate below.
+  const targetAssigneeId = assigneeId === undefined ? undefined : (assigneeId === null ? null : Number(assigneeId));
+  const isSelfAssign = targetAssigneeId !== undefined && targetAssigneeId === req.user.id;
+
+  if (!isManager && !isAssignee && !isSelfAssign) return res.status(403).json({ error: 'Not permitted to edit this task' });
+
+  if (targetAssigneeId !== undefined) {
+    if (!isManager && targetAssigneeId !== null && targetAssigneeId !== req.user.id) {
+      return res.status(403).json({ error: 'Only an admin or this project\'s manager can assign this task to someone else — you can assign it to yourself instead.' });
+    }
+    if (targetAssigneeId === null) {
       task.assigneeId = null;
     } else {
-      const assignee = data.users.find(u => u.id === Number(assigneeId));
+      const assignee = data.users.find(u => u.id === targetAssigneeId);
       if (!assignee) return res.status(400).json({ error: 'Assignee not found' });
       task.assigneeId = assignee.id;
     }

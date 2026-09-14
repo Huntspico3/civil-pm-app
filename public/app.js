@@ -669,11 +669,15 @@ async function renderProjectDetail(main, projectId) {
 
   const roleOptions = state.roles.map(r => `<option value="${r}">${r}</option>`).join('');
 
-  function assigneeOptionsForRole(role, selectedId) {
-    const matching = state.users.filter(u => u.role === role);
-    const others = state.users.filter(u => u.role !== role);
+  function assigneeOptionsForRole(role, selectedId, restrictToSelf) {
     const sel = (id) => (selectedId != null && Number(selectedId) === id) ? ' selected' : '';
     let html = `<option value=""${selectedId == null ? ' selected' : ''}>— Unassigned —</option>`;
+    if (restrictToSelf) {
+      html += `<option value="${state.me.id}"${sel(state.me.id)}>${escapeHtml(state.me.name)} (you)</option>`;
+      return html;
+    }
+    const matching = state.users.filter(u => u.role === role);
+    const others = state.users.filter(u => u.role !== role);
     if (matching.length) {
       html += `<optgroup label="Suggested (${role})">` +
         matching.map(u => `<option value="${u.id}"${sel(u.id)}>${escapeHtml(u.name)}</option>`).join('') +
@@ -690,7 +694,6 @@ async function renderProjectDetail(main, projectId) {
   const taskRows = tasks.length === 0
     ? emptyStateRowHtml('No tasks yet.', 5)
     : tasks.map(t => {
-        const canReassign = isManager;
         const canChangeStatus = isManager || t.assigneeId === state.me.id;
         return `
           <tr data-task="${t.id}">
@@ -700,9 +703,7 @@ async function renderProjectDetail(main, projectId) {
             </td>
             <td><span class="badge role-${t.requiredRole}">${t.requiredRole}</span></td>
             <td>
-              ${canReassign
-                ? `<select class="select-inline" data-action="reassign" data-task="${t.id}">${assigneeOptionsForRole(t.requiredRole, t.assigneeId)}</select>`
-                : (t.assignee ? escapeHtml(t.assignee.name) : '<span class="hint">Unassigned</span>')}
+              <select class="select-inline" data-action="reassign" data-task="${t.id}">${assigneeOptionsForRole(t.requiredRole, t.assigneeId, !isManager)}</select>
             </td>
             <td>
               ${canChangeStatus
@@ -743,8 +744,8 @@ async function renderProjectDetail(main, projectId) {
           </div>
           <div>
             <label>Assign to</label>
-            <select name="assigneeId" id="assignee-select">${assigneeOptionsForRole(state.roles[0])}</select>
-            <div class="hint">Suggestions are matched to the required role above.</div>
+            <select name="assigneeId" id="assignee-select">${assigneeOptionsForRole(state.roles[0], null, !isManager)}</select>
+            <div class="hint">${isManager ? 'Suggestions are matched to the required role above.' : 'You can only assign tasks to yourself — an admin or this project\'s manager can assign to others.'}</div>
           </div>
         </div>
         <div id="task-form-error" class="error-text"></div>
@@ -783,7 +784,7 @@ async function renderProjectDetail(main, projectId) {
   const roleSelect = main.querySelector('#required-role-select');
   const assigneeSelect = main.querySelector('#assignee-select');
   roleSelect.addEventListener('change', () => {
-    assigneeSelect.innerHTML = assigneeOptionsForRole(roleSelect.value);
+    assigneeSelect.innerHTML = assigneeOptionsForRole(roleSelect.value, null, !isManager);
   });
 
   main.querySelectorAll('[data-action="reassign"]').forEach(el => {
@@ -943,14 +944,17 @@ async function showTaskModal(main, taskId, projectId) {
   if (!task) return;
 
   const isManager = state.me.isAdmin || project.createdBy === state.me.id;
-  const canReassign = isManager;
   const canChangeStatus = isManager || task.assigneeId === state.me.id;
 
-  function assigneeOptionsForRole(role, selectedId) {
-    const matching = state.users.filter(u => u.role === role);
-    const others = state.users.filter(u => u.role !== role);
+  function assigneeOptionsForRole(role, selectedId, restrictToSelf) {
     const sel = (id) => (selectedId != null && Number(selectedId) === id) ? ' selected' : '';
     let html = `<option value=""${selectedId == null ? ' selected' : ''}>— Unassigned —</option>`;
+    if (restrictToSelf) {
+      html += `<option value="${state.me.id}"${sel(state.me.id)}>${escapeHtml(state.me.name)} (you)</option>`;
+      return html;
+    }
+    const matching = state.users.filter(u => u.role === role);
+    const others = state.users.filter(u => u.role !== role);
     if (matching.length) {
       html += `<optgroup label="Suggested (${role})">` +
         matching.map(u => `<option value="${u.id}"${sel(u.id)}>${escapeHtml(u.name)}</option>`).join('') +
@@ -974,9 +978,7 @@ async function showTaskModal(main, taskId, projectId) {
         <div class="form-row">
           <div>
             <label>Assignee</label>
-            ${canReassign
-              ? `<select class="select-inline" id="task-modal-assignee">${assigneeOptionsForRole(task.requiredRole, task.assigneeId)}</select>`
-              : `<div>${task.assignee ? escapeHtml(task.assignee.name) : 'Unassigned'}</div>`}
+            <select class="select-inline" id="task-modal-assignee">${assigneeOptionsForRole(task.requiredRole, task.assigneeId, !isManager)}</select>
           </div>
           <div>
             <label>Status</label>
