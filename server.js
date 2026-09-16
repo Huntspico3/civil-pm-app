@@ -294,7 +294,12 @@ app.get('/api/projects', requireAuth, (req, res) => {
   res.json(withCounts);
 });
 
-app.post('/api/projects', requireAuth, (req, res) => {
+// Only an admin can create a project. Since a project's "manager" is
+// defined elsewhere as "admin, or whoever created it," restricting creation
+// to admins keeps that definition consistent going forward — admins are now
+// the only source of new managers. Existing projects created by a
+// non-admin (from before this restriction) keep their createdBy as-is.
+app.post('/api/projects', requireAdmin, (req, res) => {
   const { name, description, startDate, endDate, stage, color, progress } = req.body;
   if (!name) return res.status(400).json({ error: 'name is required' });
   if (color !== undefined && !HEX_COLOR_RE.test(color)) return res.status(400).json({ error: 'Color must be a hex value like #2563eb' });

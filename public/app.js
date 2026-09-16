@@ -865,6 +865,7 @@ async function renderProjects(main) {
         <p class="subtitle">${state.me.isAdmin ? 'All projects.' : 'Projects you created or have tasks in.'}</p>
       </div>
     </div>
+    ${state.me.isAdmin ? `
     <div class="card">
       <h2>New Project</h2>
       <form id="new-project-form">
@@ -880,6 +881,7 @@ async function renderProjects(main) {
         <button class="btn" type="submit">Create Project</button>
       </form>
     </div>
+    ` : ''}
     ${cardsHtml}
   `;
 
@@ -887,27 +889,30 @@ async function renderProjects(main) {
     el.addEventListener('click', () => setView('project', { projectId: Number(el.dataset.project) }));
   });
 
-  main.querySelector('#new-project-form').addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const form = e.target;
-    const errBox = form.querySelector('#project-form-error');
-    errBox.textContent = '';
-    try {
-      await api('/projects', {
-        method: 'POST',
-        body: JSON.stringify({
-          name: form.name.value,
-          description: form.description.value,
-          startDate: form.startDate.value || undefined,
-          endDate: form.endDate.value || undefined,
-          stage: form.stage.value
-        })
-      });
-      renderProjects(main);
-    } catch (err) {
-      errBox.textContent = err.message;
-    }
-  });
+  const newProjectForm = main.querySelector('#new-project-form');
+  if (newProjectForm) {
+    newProjectForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const form = e.target;
+      const errBox = form.querySelector('#project-form-error');
+      errBox.textContent = '';
+      try {
+        await api('/projects', {
+          method: 'POST',
+          body: JSON.stringify({
+            name: form.name.value,
+            description: form.description.value,
+            startDate: form.startDate.value || undefined,
+            endDate: form.endDate.value || undefined,
+            stage: form.stage.value
+          })
+        });
+        renderProjects(main);
+      } catch (err) {
+        errBox.textContent = err.message;
+      }
+    });
+  }
 }
 
 // ---------------- PROJECT TABS (shared by List / Board / RFIs) ----------------
