@@ -418,27 +418,34 @@ async function renderDashboard(main) {
     groups.get(key).push(t);
   });
 
+  const projectLink = (project) => project
+    ? `<a href="#" class="project-link" data-project-link="${project.id}">${escapeHtml(project.name)}</a>`
+    : '—';
+
   const groupsHtml = tasks.length === 0
     ? emptyStateHtml('No tasks to show yet.')
-    : Array.from(groups.entries()).map(([key, list]) => `
-        <div class="group-title">${escapeHtml(key)}</div>
-        <div class="card">
-          <table>
-            <thead><tr><th>Task</th><th>Project</th><th>Role</th><th>Assignee</th><th>Status</th></tr></thead>
-            <tbody>
-              ${list.map(t => `
-                <tr>
-                  <td>${escapeHtml(t.title)}</td>
-                  <td>${escapeHtml(t.project ? t.project.name : '—')}</td>
-                  <td><span class="badge role-${t.requiredRole}">${t.requiredRole}</span></td>
-                  <td>${t.assignee ? escapeHtml(t.assignee.name) : '<span class="hint">Unassigned</span>'}</td>
-                  <td><span class="status ${statusClass(t.status)}">${t.status}</span></td>
-                </tr>
-              `).join('')}
-            </tbody>
-          </table>
-        </div>
-      `).join('');
+    : Array.from(groups.entries()).map(([key, list]) => {
+        const groupProject = groupBy === 'project' ? list[0].project : null;
+        return `
+          <div class="group-title">${groupProject ? projectLink(groupProject) : escapeHtml(key)}</div>
+          <div class="card">
+            <table>
+              <thead><tr><th>Task</th><th>Project</th><th>Role</th><th>Assignee</th><th>Status</th></tr></thead>
+              <tbody>
+                ${list.map(t => `
+                  <tr>
+                    <td>${escapeHtml(t.title)}</td>
+                    <td>${projectLink(t.project)}</td>
+                    <td><span class="badge role-${t.requiredRole}">${t.requiredRole}</span></td>
+                    <td>${t.assignee ? escapeHtml(t.assignee.name) : '<span class="hint">Unassigned</span>'}</td>
+                    <td><span class="status ${statusClass(t.status)}">${t.status}</span></td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+          </div>
+        `;
+      }).join('');
 
   main.innerHTML = `
     <h1>Dashboard</h1>
@@ -456,6 +463,13 @@ async function renderDashboard(main) {
     el.addEventListener('click', () => {
       state.dashboardGroupBy = el.dataset.group;
       renderDashboard(main);
+    });
+  });
+
+  main.querySelectorAll('[data-project-link]').forEach(el => {
+    el.addEventListener('click', (e) => {
+      e.preventDefault();
+      setView('project', { projectId: Number(el.dataset.projectLink) });
     });
   });
 }
