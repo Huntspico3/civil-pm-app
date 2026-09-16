@@ -8,6 +8,7 @@ const ai = require('./ai');
 const email = require('./email');
 const auth = require('./auth');
 const fileValidation = require('./fileValidation');
+const taskImport = require('./taskImport');
 
 const UPLOADS_DIR = path.join(db.DATA_DIR, 'uploads');
 fs.mkdirSync(UPLOADS_DIR, { recursive: true });
@@ -27,6 +28,14 @@ const upload = multer({
     }
     cb(null, true);
   }
+});
+
+// Task-import spreadsheets are parsed entirely in memory (never written to
+// disk) and are small text/zip documents, not media — a much lower size
+// limit than the photo/audio uploads above is appropriate here.
+const importUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 }
 });
 
 const app = express();
@@ -392,9 +401,12 @@ app.post('/api/projects/:id/tasks', requireAuth, (req, res) => {
   if (!project) return res.status(404).json({ error: 'Project not found' });
   if (!canSeeProject(req.user, project, data.tasks)) return res.status(403).json({ error: 'Not visible to you' });
 
-  const { title, description, requiredRole, assigneeId } = req.body;
+  const { title, description, requiredRole, assigneeId, dueDate } = req.body;
   if (!title || !requiredRole) return res.status(400).json({ error: 'title and requiredRole are required' });
   if (!data.roles.includes(requiredRole)) return res.status(400).json({ error: 'Invalid role' });
+  if (dueDate !== undefined && dueDate !== null && dueDate !== '' && !DATE_RE.test(dueDate)) {
+    return res.status(400).json({ error: 'Due date must be in YYYY-MM-DD format' });
+  }
 
   const isManager = req.user.isAdmin || project.createdBy === req.user.id;
   const targetAssigneeId = assigneeId ? Number(assigneeId) : null;
@@ -416,11 +428,91 @@ app.post('/api/projects/:id/tasks', requireAuth, (req, res) => {
     requiredRole,
     assigneeId: assignee ? assignee.id : null,
     status: data.taskStatuses[0],
-    progress: 0
+    progress: 0,
+    dueDate: dueDate || null
   };
   data.tasks.push(task);
   db.save(data);
   res.status(201).json({ ...task, assignee });
+});
+
+function isThisProjectManager(user, project) {
+  return user.isAdmin || project.createdBy === user.id;
+}
+
+// --- bulk task import from a CSV/Excel spreadsheet (admins & this project's manager only) ---
+// Two-step preview/confirm: parsing and validation happen here on every
+// request (never trusting whatever the client echoes back on confirm), but
+// nothing is written to data.json until the user has seen the preview and
+// explicitly confirmed it.
+app.post('/api/projects/:id/tasks/import/preview', requireAuth, importUpload.single('file'), async (req, res) => {
+  const data = db.load();
+  const project = data.projects.find(p => p.id === Number(req.params.id));
+  if (!project) return res.status(404).json({ error: 'Project not found' });
+  if (!isThisProjectManager(req.user, project)) {
+    return res.status(403).json({ error: "Only an admin or this project's manager can import tasks" });
+  }
+  if (!req.file) return res.status(400).json({ error: 'A CSV or Excel (.xlsx) file is required' });
+
+  let rawRows;
+  try {
+    rawRows = await taskImport.parseFile(req.file.originalname, req.file.buffer);
+  } catch (err) {
+    return res.status(400).json({ error: err.message });
+  }
+  if (rawRows.length === 0) {
+    return res.status(400).json({ error: 'No task rows found in that file — check it has a header row plus at least one task.' });
+  }
+  if (rawRows.length > 1000) {
+    return res.status(400).json({ error: `That file has ${rawRows.length} rows — import up to 1000 tasks at a time.` });
+  }
+
+  const rows = rawRows.map((r, i) => taskImport.validateImportRow(r, i + 2, data));
+  const validCount = rows.filter(r => r.errors.length === 0).length;
+  res.json({ rows, validCount, errorCount: rows.length - validCount });
+});
+
+app.post('/api/projects/:id/tasks/import/confirm', requireAuth, (req, res) => {
+  const data = db.load();
+  const project = data.projects.find(p => p.id === Number(req.params.id));
+  if (!project) return res.status(404).json({ error: 'Project not found' });
+  if (!isThisProjectManager(req.user, project)) {
+    return res.status(403).json({ error: "Only an admin or this project's manager can import tasks" });
+  }
+
+  const inputRows = Array.isArray(req.body.rows) ? req.body.rows : [];
+  if (inputRows.length === 0) return res.status(400).json({ error: 'No rows to import' });
+  if (inputRows.length > 1000) return res.status(400).json({ error: 'Import up to 1000 tasks at a time.' });
+
+  // Re-validate from scratch server-side — the rows the client sends back are
+  // whatever it last showed in the preview, not a trusted source of truth.
+  const validated = inputRows.map((r, i) => taskImport.validateImportRow(r, r.rowNumber || i + 2, data));
+  const toCreate = validated.filter(r => r.errors.length === 0);
+  const skipped = validated.filter(r => r.errors.length > 0);
+
+  const created = toCreate.map(r => {
+    const task = {
+      id: db.nextId('task'),
+      projectId: project.id,
+      title: r.title,
+      description: r.description || '',
+      requiredRole: r.requiredRole,
+      assigneeId: r.assigneeId || null,
+      status: r.status,
+      progress: 0,
+      dueDate: r.dueDate || null
+    };
+    data.tasks.push(task);
+    return task;
+  });
+  if (created.length) db.save(data);
+
+  res.json({
+    createdCount: created.length,
+    skippedCount: skipped.length,
+    skipped: skipped.map(r => ({ rowNumber: r.rowNumber, title: r.title, errors: r.errors })),
+    tasks: created.map(t => ({ ...t, assignee: data.users.find(u => u.id === t.assigneeId) || null }))
+  });
 });
 
 app.patch('/api/tasks/:id', requireAuth, (req, res) => {
@@ -430,7 +522,7 @@ app.patch('/api/tasks/:id', requireAuth, (req, res) => {
   const project = data.projects.find(p => p.id === task.projectId);
   const isManager = req.user.isAdmin || project.createdBy === req.user.id;
   const isAssignee = task.assigneeId === req.user.id;
-  const { assigneeId, status, title, description, requiredRole, progress } = req.body;
+  const { assigneeId, status, title, description, requiredRole, progress, dueDate } = req.body;
 
   // A non-manager may still assign a task to themselves (claiming unassigned
   // work), so that alone must be enough to pass the general edit gate below.
@@ -467,9 +559,101 @@ app.patch('/api/tasks/:id', requireAuth, (req, res) => {
     if (!data.roles.includes(requiredRole)) return res.status(400).json({ error: 'Invalid role' });
     task.requiredRole = requiredRole;
   }
+  if (isManager && dueDate !== undefined) {
+    if (dueDate !== null && dueDate !== '' && !DATE_RE.test(dueDate)) {
+      return res.status(400).json({ error: 'Due date must be in YYYY-MM-DD format' });
+    }
+    task.dueDate = dueDate || null;
+  }
 
   db.save(data);
   res.json({ ...task, assignee: data.users.find(u => u.id === task.assigneeId) || null });
+});
+
+function enrichTask(t, data) {
+  return {
+    ...t,
+    assignee: data.users.find(u => u.id === t.assigneeId) || null,
+    project: data.projects.find(p => p.id === t.projectId) || null
+  };
+}
+
+// A single, filterable/sortable/paginated task list — the shared backbone
+// behind the Task Board, My Tasks, and a project's List View, so search,
+// filters and sorting behave identically everywhere a task list appears
+// instead of each view re-implementing its own slice of this logic.
+app.get('/api/tasks', requireAuth, (req, res) => {
+  const data = db.load();
+  const { projectId, assigneeId, status, requiredRole, progressMin, progressMax, search, sortBy, sortDir } = req.query;
+
+  let tasks = data.tasks.slice();
+
+  // Visibility: admins see every task; everyone else sees tasks in projects
+  // they manage, plus tasks assigned to them personally — the same rule
+  // already used by the dashboard, just applied here to a filterable list.
+  if (!req.user.isAdmin) {
+    tasks = tasks.filter(t => {
+      const project = data.projects.find(p => p.id === t.projectId);
+      const isThisProjectManager = project && project.createdBy === req.user.id;
+      return isThisProjectManager || t.assigneeId === req.user.id;
+    });
+  }
+
+  if (projectId !== undefined && projectId !== '') tasks = tasks.filter(t => t.projectId === Number(projectId));
+  if (assigneeId !== undefined) {
+    const target = assigneeId === '' ? null : Number(assigneeId);
+    tasks = tasks.filter(t => t.assigneeId === target);
+  }
+  if (status) tasks = tasks.filter(t => t.status === status);
+  if (requiredRole) tasks = tasks.filter(t => t.requiredRole === requiredRole);
+  if (progressMin !== undefined && progressMin !== '') {
+    const min = Number(progressMin);
+    if (!Number.isNaN(min)) tasks = tasks.filter(t => (t.progress || 0) >= min);
+  }
+  if (progressMax !== undefined && progressMax !== '') {
+    const max = Number(progressMax);
+    if (!Number.isNaN(max)) tasks = tasks.filter(t => (t.progress || 0) <= max);
+  }
+  if (search && search.trim()) {
+    const needle = search.trim().toLowerCase();
+    tasks = tasks.filter(t => t.title.toLowerCase().includes(needle) || (t.description || '').toLowerCase().includes(needle));
+  }
+
+  const enriched = tasks.map(t => enrichTask(t, data));
+
+  const dir = sortDir === 'desc' ? -1 : 1;
+  if (sortBy === 'dueDate') {
+    enriched.sort((a, b) => {
+      if (!a.dueDate && !b.dueDate) return 0;
+      if (!a.dueDate) return 1;
+      if (!b.dueDate) return -1;
+      return dir * a.dueDate.localeCompare(b.dueDate);
+    });
+  } else if (sortBy === 'progress') {
+    enriched.sort((a, b) => dir * ((a.progress || 0) - (b.progress || 0)));
+  } else if (sortBy === 'assignee') {
+    enriched.sort((a, b) => {
+      const an = a.assignee ? a.assignee.name : '';
+      const bn = b.assignee ? b.assignee.name : '';
+      if (!an && !bn) return 0;
+      if (!an) return 1;
+      if (!bn) return -1;
+      return dir * an.localeCompare(bn);
+    });
+  }
+
+  const total = enriched.length;
+  const pageNum = Math.max(1, Number(req.query.page) || 1);
+  const size = Math.min(500, Math.max(1, Number(req.query.pageSize) || 50));
+  const start = (pageNum - 1) * size;
+
+  res.json({
+    tasks: enriched.slice(start, start + size),
+    total,
+    page: pageNum,
+    pageSize: size,
+    totalPages: Math.max(1, Math.ceil(total / size))
+  });
 });
 
 // --- dashboard ---

@@ -648,6 +648,70 @@ body.gantt-dragging { user-select: none; }
   text-align: right;
 }
 
+/* ============ TASK LIST CONTROLS (search/filter/sort/pagination) ============ */
+/* Shared by the Task Board, My Tasks, and a project's List View so every
+   place tasks are listed looks and behaves the same way. */
+
+.task-filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.55rem;
+  margin: 0.9rem 0 1.1rem;
+  padding: 0.85rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.task-filter-bar input,
+.task-filter-bar select {
+  padding: 0.4rem 0.55rem;
+  font-size: 0.82rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--card);
+  color: var(--text);
+}
+.task-filter-search { flex: 1 1 200px; min-width: 160px; }
+.task-filter-progress {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.82rem;
+  color: var(--text-muted);
+}
+.task-filter-progress input { width: 4.5em; }
+.task-filter-bar .task-filter-clear { flex: 0 0 auto; }
+
+.task-row-clickable { cursor: pointer; }
+.task-row-clickable:hover { background: var(--primary-light); }
+
+.pagination-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-top: 0.9rem;
+  padding-top: 0.9rem;
+  border-top: 1px solid var(--border);
+}
+.pagination-info { font-size: 0.82rem; color: var(--text-muted); }
+.pagination-controls { display: flex; gap: 0.5rem; }
+
+/* ============ TASK IMPORT ============ */
+
+.modal-card-wide { max-width: 760px; }
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.65rem;
+  margin-top: 1rem;
+}
+.import-preview-scroll { max-height: 45vh; overflow-y: auto; margin-top: 0.75rem; }
+.import-row-error { background: var(--danger-bg); }
+.import-row-issue { color: var(--danger); font-size: 0.82rem; }
+
 /* ============ RFIs ============ */
 
 .rfi-card { margin-bottom: 1rem; }

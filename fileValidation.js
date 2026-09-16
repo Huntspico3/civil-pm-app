@@ -71,4 +71,15 @@ function isValidAudioFile(filePath) {
   return detectAudioExt(filePath) !== null;
 }
 
-module.exports = { isValidImageFile, isValidAudioFile, detectImageExt, detectAudioExt };
+// .xlsx files are actually zip archives, so their real signature is the zip
+// local-file-header magic number. Same "don't trust the claimed type" logic
+// as the image/audio checks above, applied to the task-import upload — the
+// file here comes from multer's memory storage, so this checks the buffer
+// directly rather than reading it back off disk.
+const ZIP_SIGNATURE = [0x50, 0x4B, 0x03, 0x04];
+function isValidXlsxBuffer(buffer) {
+  if (!buffer || buffer.length < ZIP_SIGNATURE.length) return false;
+  return ZIP_SIGNATURE.every((byte, i) => buffer[i] === byte);
+}
+
+module.exports = { isValidImageFile, isValidAudioFile, detectImageExt, detectAudioExt, isValidXlsxBuffer };

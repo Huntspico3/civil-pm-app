@@ -181,6 +181,166 @@ function bindTaskProgressBars(container, onUpdated) {
   });
 }
 
+// ---------------- TASK LIST CONTROLS (search/filter/sort/pagination) ----------------
+// One shared search+filter+sort+pagination bar, used identically by the Task
+// Board, My Tasks, and a project's List View, all backed by the same
+// GET /api/tasks endpoint — so results behave the same everywhere regardless
+// of which view you're looking at.
+
+function defaultTaskFilters() {
+  return {
+    search: '', assigneeId: '', status: '', requiredRole: '',
+    progressMin: '', progressMax: '', sortBy: '', sortDir: 'asc',
+    page: 1, pageSize: 50
+  };
+}
+
+function hasActiveTaskFilters(filters) {
+  return !!(filters.search || filters.assigneeId || filters.status || filters.requiredRole ||
+    filters.progressMin !== '' || filters.progressMax !== '' || filters.sortBy);
+}
+
+// `opts.showAssignee` hides the assignee filter on views that are already
+// scoped to one person (e.g. My Tasks doesn't need to filter by assignee).
+function taskFilterBarHtml(filters, opts = {}) {
+  const showAssignee = opts.showAssignee !== false;
+  return `
+    <div class="task-filter-bar">
+      <input type="search" class="task-filter-search" placeholder="Search tasks…" value="${escapeHtml(filters.search)}" />
+      ${showAssignee ? `
+        <select class="task-filter-assignee">
+          <option value="">Anyone</option>
+          <option value="unassigned" ${filters.assigneeId === 'unassigned' ? 'selected' : ''}>Unassigned</option>
+          ${state.users.map(u => `<option value="${u.id}" ${String(filters.assigneeId) === String(u.id) ? 'selected' : ''}>${escapeHtml(u.name)}</option>`).join('')}
+        </select>
+      ` : ''}
+      <select class="task-filter-status">
+        <option value="">Any status</option>
+        ${state.taskStatuses.map(s => `<option value="${escapeHtml(s)}" ${filters.status === s ? 'selected' : ''}>${escapeHtml(s)}</option>`).join('')}
+      </select>
+      <select class="task-filter-role">
+        <option value="">Any discipline</option>
+        ${state.roles.map(r => `<option value="${escapeHtml(r)}" ${filters.requiredRole === r ? 'selected' : ''}>${escapeHtml(r)}</option>`).join('')}
+      </select>
+      <div class="task-filter-progress">
+        <input type="number" class="task-filter-progress-min" min="0" max="100" placeholder="Min %" value="${escapeHtml(filters.progressMin)}" />
+        <span>–</span>
+        <input type="number" class="task-filter-progress-max" min="0" max="100" placeholder="Max %" value="${escapeHtml(filters.progressMax)}" />
+      </div>
+      <select class="task-filter-sort">
+        <option value="">Sort: default</option>
+        <option value="dueDate" ${filters.sortBy === 'dueDate' ? 'selected' : ''}>Due date</option>
+        <option value="progress" ${filters.sortBy === 'progress' ? 'selected' : ''}>Progress</option>
+        <option value="assignee" ${filters.sortBy === 'assignee' ? 'selected' : ''}>Assignee</option>
+      </select>
+      <select class="task-filter-sort-dir" ${filters.sortBy ? '' : 'disabled'}>
+        <option value="asc" ${filters.sortDir === 'asc' ? 'selected' : ''}>&uarr; Asc</option>
+        <option value="desc" ${filters.sortDir === 'desc' ? 'selected' : ''}>&darr; Desc</option>
+      </select>
+      ${hasActiveTaskFilters(filters) ? `<button type="button" class="btn small secondary task-filter-clear">Clear filters</button>` : ''}
+    </div>
+  `;
+}
+
+function bindTaskFilterBar(container, filters, onChange) {
+  // 'change' (not 'input') for every one of these — they're selects, or
+  // number fields that should only re-render on blur/Enter, not per
+  // keystroke (which would rebuild the DOM mid-type and drop focus).
+  const bind = (selector, prop, transform) => {
+    const el = container.querySelector(selector);
+    if (!el) return;
+    el.addEventListener('change', () => {
+      filters[prop] = transform ? transform(el.value) : el.value;
+      filters.page = 1;
+      onChange();
+    });
+  };
+
+  const search = container.querySelector('.task-filter-search');
+  if (search) {
+    let searchTimer = null;
+    search.addEventListener('input', () => {
+      clearTimeout(searchTimer);
+      searchTimer = setTimeout(async () => {
+        filters.search = search.value;
+        filters.page = 1;
+        // onChange rebuilds the whole view (a fresh DOM node replaces this
+        // one), so the browser drops focus on its own — put it back on the
+        // new search box, cursor at the end, once the re-render lands.
+        await onChange();
+        const refreshed = container.querySelector('.task-filter-search');
+        if (refreshed) {
+          refreshed.focus();
+          refreshed.setSelectionRange(refreshed.value.length, refreshed.value.length);
+        }
+      }, 300);
+    });
+  }
+  bind('.task-filter-assignee', 'assigneeId');
+  bind('.task-filter-status', 'status');
+  bind('.task-filter-role', 'requiredRole');
+  bind('.task-filter-progress-min', 'progressMin');
+  bind('.task-filter-progress-max', 'progressMax');
+
+  const sortBy = container.querySelector('.task-filter-sort');
+  if (sortBy) sortBy.addEventListener('change', () => { filters.sortBy = sortBy.value; onChange(); });
+  const sortDir = container.querySelector('.task-filter-sort-dir');
+  if (sortDir) sortDir.addEventListener('change', () => { filters.sortDir = sortDir.value; onChange(); });
+  const clear = container.querySelector('.task-filter-clear');
+  if (clear) clear.addEventListener('click', () => { Object.assign(filters, defaultTaskFilters()); onChange(); });
+}
+
+// Builds the /api/tasks query string from a filters object plus any
+// view-specific fixed params (e.g. projectId for a single project's views).
+function taskQueryParams(filters, extra = {}) {
+  const params = new URLSearchParams();
+  if (filters.search) params.set('search', filters.search);
+  if (filters.assigneeId === 'unassigned') params.set('assigneeId', '');
+  else if (filters.assigneeId) params.set('assigneeId', filters.assigneeId);
+  if (filters.status) params.set('status', filters.status);
+  if (filters.requiredRole) params.set('requiredRole', filters.requiredRole);
+  if (filters.progressMin !== '') params.set('progressMin', filters.progressMin);
+  if (filters.progressMax !== '') params.set('progressMax', filters.progressMax);
+  if (filters.sortBy) { params.set('sortBy', filters.sortBy); params.set('sortDir', filters.sortDir || 'asc'); }
+  params.set('page', filters.page || 1);
+  params.set('pageSize', filters.pageSize || 50);
+  Object.entries(extra).forEach(([k, v]) => { if (v !== undefined && v !== null && v !== '') params.set(k, v); });
+  return params.toString();
+}
+
+function paginationBarHtml(page, totalPages, total, opts = {}) {
+  if (opts.loadMore) {
+    const loadedCount = Math.min(opts.loadedCount || total, total);
+    if (page >= totalPages) return `<div class="pagination-bar"><span class="pagination-info">${total} task${total === 1 ? '' : 's'} shown</span></div>`;
+    return `
+      <div class="pagination-bar">
+        <span class="pagination-info">Showing ${loadedCount} of ${total} tasks</span>
+        <button type="button" class="btn small secondary pagination-next">Load more tasks</button>
+      </div>
+    `;
+  }
+  return `
+    <div class="pagination-bar">
+      <span class="pagination-info">${total} task${total === 1 ? '' : 's'} · page ${page} of ${totalPages}</span>
+      <div class="pagination-controls">
+        <button type="button" class="btn small secondary pagination-prev" ${page <= 1 ? 'disabled' : ''}>&larr; Prev</button>
+        <button type="button" class="btn small secondary pagination-next" ${page >= totalPages ? 'disabled' : ''}>Next &rarr;</button>
+      </div>
+    </div>
+  `;
+}
+
+function bindPaginationBar(container, filters, onChange, opts = {}) {
+  const prev = container.querySelector('.pagination-prev');
+  const next = container.querySelector('.pagination-next');
+  if (prev) prev.addEventListener('click', () => { filters.page = Math.max(1, filters.page - 1); onChange(); });
+  if (next) next.addEventListener('click', () => {
+    if (opts.loadMore) filters.pageSize += opts.pageSize || 150;
+    else filters.page += 1;
+    onChange();
+  });
+}
+
 function start() {
   if (!state.gateToken) {
     renderGateScreen();
@@ -569,18 +729,22 @@ async function renderDashboard(main) {
 
 async function renderMyTasks(main) {
   if (state.myTasksUserId === null) state.myTasksUserId = state.me.id;
+  if (!state.myTasksFilters) state.myTasksFilters = defaultTaskFilters();
+  const filters = state.myTasksFilters;
 
   main.innerHTML = `<h1>My Tasks</h1><p class="subtitle">Loading…</p>`;
-  let data, rfiData;
+  let taskData, rfiData;
   try {
-    data = await api('/my-tasks?userId=' + state.myTasksUserId);
+    const qs = taskQueryParams(filters, { assigneeId: state.myTasksUserId });
+    taskData = await api('/tasks?' + qs);
     rfiData = await api('/my-rfis?userId=' + state.myTasksUserId);
   } catch (e) {
     main.innerHTML = `<h1>My Tasks</h1><p class="error-text">${escapeHtml(e.message)}</p>`;
     return;
   }
 
-  const { user, tasks } = data;
+  const user = state.users.find(u => u.id === state.myTasksUserId) || state.me;
+  const { tasks, total, page, totalPages } = taskData;
   const openRfis = rfiData.rfis;
 
   const rfiSectionHtml = `
@@ -612,48 +776,58 @@ async function renderMyTasks(main) {
     `
     : '';
 
-  const groups = new Map();
-  tasks.forEach(t => {
-    const key = t.project ? t.project.name : 'Unknown project';
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key).push(t);
-  });
-
-  const groupsHtml = tasks.length === 0
-    ? emptyStateHtml(`${user.name} has no assigned tasks.`)
-    : Array.from(groups.entries()).map(([projectName, list]) => `
-        <div class="group-title">${escapeHtml(projectName)}</div>
-        <div class="card">
-          <table>
-            <thead><tr><th>Task</th><th>Required Role</th><th>Status</th></tr></thead>
-            <tbody>
-              ${list.map(t => `
-                <tr>
-                  <td>${escapeHtml(t.title)}</td>
-                  <td><span class="badge role-${escapeHtml(t.requiredRole)}">${escapeHtml(t.requiredRole)}</span></td>
-                  <td><span class="status ${escapeHtml(statusClass(t.status))}">${escapeHtml(t.status)}</span></td>
-                </tr>
-              `).join('')}
-            </tbody>
-          </table>
-        </div>
-      `).join('');
+  const tableHtml = tasks.length === 0
+    ? emptyStateHtml(hasActiveTaskFilters(filters) ? 'No tasks match these filters.' : `${user.name} has no assigned tasks.`)
+    : `
+      <table>
+        <thead><tr><th>Task</th><th>Project</th><th>Discipline</th><th>Status</th><th>Progress</th><th>Due</th></tr></thead>
+        <tbody>
+          ${tasks.map(t => `
+            <tr class="task-row-clickable" data-open-task="${t.id}">
+              <td><strong>${escapeHtml(t.title)}</strong></td>
+              <td>${t.project ? escapeHtml(t.project.name) : '—'}</td>
+              <td><span class="badge role-${escapeHtml(t.requiredRole)}">${escapeHtml(t.requiredRole)}</span></td>
+              <td><span class="status ${escapeHtml(statusClass(t.status))}">${escapeHtml(t.status)}</span></td>
+              <td>${taskProgressBarHtml(t, false, 'sm')}</td>
+              <td>${formatDate(t.dueDate)}</td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    `;
 
   main.innerHTML = `
     <h1>My Tasks</h1>
     <p class="subtitle">${state.me.isAdmin ? `Tasks assigned to ${escapeHtml(user.name)}, across every project.` : 'Everything assigned to you, across every project.'}</p>
     ${pickerHtml}
     ${rfiSectionHtml}
-    ${groupsHtml}
+    <div class="card">
+      <h2>Tasks</h2>
+      ${taskFilterBarHtml(filters, { showAssignee: false })}
+      ${tableHtml}
+      ${tasks.length > 0 ? paginationBarHtml(page, totalPages, total) : ''}
+    </div>
+    <div id="task-modal-root"></div>
   `;
 
   const picker = main.querySelector('#my-tasks-user-picker');
   if (picker) {
     picker.addEventListener('change', () => {
       state.myTasksUserId = Number(picker.value);
+      state.myTasksFilters = defaultTaskFilters();
       renderMyTasks(main);
     });
   }
+
+  bindTaskFilterBar(main, filters, () => renderMyTasks(main));
+  bindPaginationBar(main, filters, () => renderMyTasks(main));
+
+  main.querySelectorAll('[data-open-task]').forEach(row => {
+    row.addEventListener('click', () => {
+      const task = tasks.find(t => t.id === Number(row.dataset.openTask));
+      if (task) showTaskModal(main, task, () => renderMyTasks(main));
+    });
+  });
 }
 
 // ---------------- PROJECTS ----------------
@@ -758,11 +932,17 @@ function bindProjectTabs(main, projectId) {
 // ---------------- PROJECT DETAIL ----------------
 
 async function renderProjectDetail(main, projectId) {
+  if (!state.projectListFilters || state.projectListFilters.projectId !== projectId) {
+    state.projectListFilters = Object.assign(defaultTaskFilters(), { projectId });
+  }
+  const filters = state.projectListFilters;
+
   main.innerHTML = `<p class="subtitle">Loading…</p>`;
-  let project, tasks, fieldReports;
+  let project, taskData, fieldReports;
   try {
     project = await api('/projects/' + projectId);
-    tasks = await api('/projects/' + projectId + '/tasks');
+    const qs = taskQueryParams(filters, { projectId });
+    taskData = await api('/tasks?' + qs);
     fieldReports = await api('/projects/' + projectId + '/reports');
   } catch (e) {
     main.innerHTML = `<button class="back-link" id="back-to-projects">&larr; Back to Projects</button><p class="error-text">${escapeHtml(e.message)}</p>`;
@@ -770,6 +950,7 @@ async function renderProjectDetail(main, projectId) {
     return;
   }
 
+  const { tasks, total, page, totalPages } = taskData;
   const isManager = state.me.isAdmin || project.createdBy === state.me.id;
 
   const roleOptions = state.roles.map(r => `<option value="${escapeHtml(r)}">${escapeHtml(r)}</option>`).join('');
@@ -797,11 +978,11 @@ async function renderProjectDetail(main, projectId) {
   }
 
   const taskRows = tasks.length === 0
-    ? emptyStateRowHtml('No tasks yet.', 5)
+    ? emptyStateRowHtml(hasActiveTaskFilters(filters) ? 'No tasks match these filters.' : 'No tasks yet.', 6)
     : tasks.map(t => {
         const canChangeStatus = isManager || t.assigneeId === state.me.id;
         return `
-          <tr data-task="${t.id}">
+          <tr data-task="${t.id}" class="task-row-clickable" data-open-task="${t.id}">
             <td>
               <strong>${escapeHtml(t.title)}</strong>
               ${t.description ? `<div class="hint">${escapeHtml(t.description)}</div>` : ''}
@@ -817,6 +998,8 @@ async function renderProjectDetail(main, projectId) {
                   </select>`
                 : `<span class="status ${escapeHtml(statusClass(t.status))}">${escapeHtml(t.status)}</span>`}
             </td>
+            <td>${taskProgressBarHtml(t, false, 'sm')}</td>
+            <td>${formatDate(t.dueDate)}</td>
           </tr>
         `;
       }).join('');
@@ -830,11 +1013,16 @@ async function renderProjectDetail(main, projectId) {
     ${projectTabsHtml('project')}
 
     <div class="card">
-      <h2>Tasks</h2>
+      <div class="section-header">
+        <h2>Tasks</h2>
+        ${isManager ? `<button type="button" class="btn small secondary" id="import-tasks-btn">Import Tasks</button>` : ''}
+      </div>
+      ${taskFilterBarHtml(filters)}
       <table>
-        <thead><tr><th>Task</th><th>Role</th><th>Assignee</th><th>Status</th></tr></thead>
+        <thead><tr><th>Task</th><th>Role</th><th>Assignee</th><th>Status</th><th>Progress</th><th>Due</th></tr></thead>
         <tbody>${taskRows}</tbody>
       </table>
+      ${tasks.length > 0 ? paginationBarHtml(page, totalPages, total) : ''}
     </div>
 
     <div class="card">
@@ -851,6 +1039,10 @@ async function renderProjectDetail(main, projectId) {
             <label>Assign to</label>
             <select name="assigneeId" id="assignee-select">${assigneeOptionsForRole(state.roles[0], null, !isManager)}</select>
             <div class="hint">${isManager ? 'Suggestions are matched to the required role above.' : 'You can only assign tasks to yourself — an admin or this project\'s manager can assign to others.'}</div>
+          </div>
+          <div>
+            <label>Due date</label>
+            <input name="dueDate" type="date" />
           </div>
         </div>
         <div id="task-form-error" class="error-text"></div>
@@ -877,14 +1069,23 @@ async function renderProjectDetail(main, projectId) {
           </table>`}
     </div>
     <div id="report-modal-root"></div>
+    <div id="task-modal-root"></div>
+    <div id="import-modal-root"></div>
   `;
 
   main.querySelector('#back-to-projects').addEventListener('click', () => setView('projects'));
   bindProjectTabs(main, projectId);
+  bindTaskFilterBar(main, filters, () => renderProjectDetail(main, projectId));
+  bindPaginationBar(main, filters, () => renderProjectDetail(main, projectId));
 
   main.querySelectorAll('[data-view-report]').forEach(el => {
     el.addEventListener('click', () => showReportModal(main, Number(el.dataset.viewReport), false));
   });
+
+  const importBtn = main.querySelector('#import-tasks-btn');
+  if (importBtn) {
+    importBtn.addEventListener('click', () => showImportTasksModal(main, projectId, () => renderProjectDetail(main, projectId)));
+  }
 
   const roleSelect = main.querySelector('#required-role-select');
   const assigneeSelect = main.querySelector('#assignee-select');
@@ -893,6 +1094,7 @@ async function renderProjectDetail(main, projectId) {
   });
 
   main.querySelectorAll('[data-action="reassign"]').forEach(el => {
+    el.addEventListener('click', (e) => e.stopPropagation());
     el.addEventListener('change', async () => {
       try {
         await api('/tasks/' + el.dataset.task, {
@@ -908,6 +1110,7 @@ async function renderProjectDetail(main, projectId) {
   });
 
   main.querySelectorAll('[data-action="status"]').forEach(el => {
+    el.addEventListener('click', (e) => e.stopPropagation());
     el.addEventListener('change', async () => {
       try {
         await api('/tasks/' + el.dataset.task, {
@@ -919,6 +1122,14 @@ async function renderProjectDetail(main, projectId) {
         alert(err.message);
         renderProjectDetail(main, projectId);
       }
+    });
+  });
+
+  main.querySelectorAll('[data-open-task]').forEach(row => {
+    row.addEventListener('click', (e) => {
+      if (e.target.closest('select, button, a, input')) return;
+      const task = tasks.find(t => t.id === Number(row.dataset.openTask));
+      if (task) showTaskModal(main, task, () => renderProjectDetail(main, projectId));
     });
   });
 
@@ -934,7 +1145,8 @@ async function renderProjectDetail(main, projectId) {
           title: form.title.value,
           description: form.description.value,
           requiredRole: form.requiredRole.value,
-          assigneeId: form.assigneeId.value || null
+          assigneeId: form.assigneeId.value || null,
+          dueDate: form.dueDate.value || null
         })
       });
       renderProjectDetail(main, projectId);
@@ -944,20 +1156,131 @@ async function renderProjectDetail(main, projectId) {
   });
 }
 
+// ---------------- IMPORT TASKS (CSV / Excel) ----------------
+// Two-step: pick a file -> see a row-by-row preview (with any problems
+// flagged inline) -> confirm to actually create the valid tasks. Nothing is
+// created until the user explicitly confirms the preview.
+
+function showImportTasksModal(main, projectId, onImported) {
+  const modalRoot = main.querySelector('#import-modal-root');
+  if (!modalRoot) return;
+
+  const close = () => { modalRoot.innerHTML = ''; };
+
+  function renderShell(innerHtml) {
+    modalRoot.innerHTML = `
+      <div class="modal-overlay" id="import-modal-overlay">
+        <div class="modal-card modal-card-wide">
+          <button class="modal-close" id="import-modal-close">&times;</button>
+          <h2>Import Tasks</h2>
+          ${innerHtml}
+        </div>
+      </div>
+    `;
+    document.getElementById('import-modal-close').addEventListener('click', close);
+    document.getElementById('import-modal-overlay').addEventListener('click', (e) => {
+      if (e.target.id === 'import-modal-overlay') close();
+    });
+  }
+
+  function renderPicker(errorMessage) {
+    renderShell(`
+      <p class="subtitle">Upload a CSV or Excel (.xlsx) file with columns for Title, Description, Assignee (email or name), Discipline/Role, Status, and Due Date. You'll see a preview before anything is created.</p>
+      <input type="file" id="import-file-input" accept=".csv,.xlsx" />
+      ${errorMessage ? `<p class="error-text">${escapeHtml(errorMessage)}</p>` : ''}
+    `);
+    document.getElementById('import-file-input').addEventListener('change', async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      renderShell(`<p class="subtitle">Reading ${escapeHtml(file.name)}…</p>`);
+      try {
+        const formData = new FormData();
+        formData.append('file', file);
+        const result = await apiUpload('/projects/' + projectId + '/tasks/import/preview', formData);
+        renderPreview(result);
+      } catch (err) {
+        renderPicker(err.message);
+      }
+    });
+  }
+
+  function renderPreview(result) {
+    const { rows, validCount, errorCount } = result;
+    renderShell(`
+      <p class="subtitle">${validCount} task${validCount === 1 ? '' : 's'} ready to import${errorCount ? `, ${errorCount} row${errorCount === 1 ? '' : 's'} will be skipped (see below)` : ''}.</p>
+      <div class="import-preview-scroll">
+        <table>
+          <thead><tr><th>Row</th><th>Title</th><th>Discipline</th><th>Status</th><th>Assignee</th><th>Due</th><th>Issue</th></tr></thead>
+          <tbody>
+            ${rows.map(r => `
+              <tr class="${r.errors.length ? 'import-row-error' : ''}">
+                <td>${r.rowNumber}</td>
+                <td>${escapeHtml(r.title || '(blank)')}</td>
+                <td>${escapeHtml(r.requiredRole || '—')}</td>
+                <td>${escapeHtml(r.status || '—')}</td>
+                <td>${escapeHtml(r.assigneeName || r.assigneeRaw || '—')}</td>
+                <td>${r.dueDate ? formatDate(r.dueDate) : '—'}</td>
+                <td class="import-row-issue">${r.errors.length ? escapeHtml(r.errors.join('; ')) : ''}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+      <div id="import-confirm-error" class="error-text"></div>
+      <div class="modal-actions">
+        <button type="button" class="btn secondary" id="import-choose-different">Choose a different file</button>
+        <button type="button" class="btn" id="import-confirm-btn" ${validCount === 0 ? 'disabled' : ''}>Import ${validCount} task${validCount === 1 ? '' : 's'}</button>
+      </div>
+    `);
+    document.getElementById('import-choose-different').addEventListener('click', () => renderPicker());
+    const confirmBtn = document.getElementById('import-confirm-btn');
+    if (confirmBtn) {
+      confirmBtn.addEventListener('click', async () => {
+        confirmBtn.disabled = true;
+        confirmBtn.textContent = 'Importing…';
+        const errBox = document.getElementById('import-confirm-error');
+        try {
+          const validRows = rows.filter(r => r.errors.length === 0);
+          const confirmResult = await api('/projects/' + projectId + '/tasks/import/confirm', {
+            method: 'POST',
+            body: JSON.stringify({ rows: validRows })
+          });
+          close();
+          if (onImported) onImported();
+          alert(`Imported ${confirmResult.createdCount} task${confirmResult.createdCount === 1 ? '' : 's'}.`);
+        } catch (err) {
+          errBox.textContent = err.message;
+          confirmBtn.disabled = false;
+          confirmBtn.textContent = `Import ${validCount} task${validCount === 1 ? '' : 's'}`;
+        }
+      });
+    }
+  }
+
+  renderPicker();
+}
+
 // ---------------- PROJECT BOARD (KANBAN) ----------------
 
 async function renderProjectBoard(main, projectId) {
+  if (!state.boardFilters || state.boardFilters.projectId !== projectId) {
+    state.boardFilters = Object.assign(defaultTaskFilters(), { projectId, pageSize: 150 });
+  }
+  const filters = state.boardFilters;
+
   main.innerHTML = `<p class="subtitle">Loading…</p>`;
-  let project, tasks;
+  let project, taskData;
   try {
     project = await api('/projects/' + projectId);
-    tasks = await api('/projects/' + projectId + '/tasks');
+    const qs = taskQueryParams(filters, { projectId });
+    taskData = await api('/tasks?' + qs);
   } catch (e) {
     main.innerHTML = `<button class="back-link" id="back-to-projects">&larr; Back to Projects</button><p class="error-text">${escapeHtml(e.message)}</p>`;
     main.querySelector('#back-to-projects').addEventListener('click', () => setView('projects'));
     return;
   }
 
+  const { tasks, total, page, totalPages } = taskData;
   const isManager = state.me.isAdmin || project.createdBy === state.me.id;
 
   const columnsHtml = state.taskStatuses.map(status => {
@@ -971,6 +1294,7 @@ async function renderProjectBoard(main, projectId) {
           <div class="board-card-meta">
             <span class="badge role-${escapeHtml(t.requiredRole)}">${escapeHtml(t.requiredRole)}</span>
             <span>${t.assignee ? escapeHtml(t.assignee.name) : 'Unassigned'}</span>
+            ${t.dueDate ? `<span>Due ${formatDate(t.dueDate)}</span>` : ''}
           </div>
           ${taskProgressBarHtml(t, canEditProgress, 'sm')}
         </div>
@@ -993,17 +1317,24 @@ async function renderProjectBoard(main, projectId) {
     <h1>${escapeHtml(project.name)}</h1>
     <p class="subtitle">Board view. Drag a card between columns to update its status, or click a card for details.</p>
     ${projectTabsHtml('project-board')}
+    ${taskFilterBarHtml(filters)}
     <div class="board">${columnsHtml}</div>
+    ${tasks.length > 0 ? paginationBarHtml(page, totalPages, total, { loadMore: true, loadedCount: tasks.length }) : ''}
     <div id="task-modal-root"></div>
   `;
 
   main.querySelector('#back-to-projects').addEventListener('click', () => setView('projects'));
   bindProjectTabs(main, projectId);
+  bindTaskFilterBar(main, filters, () => renderProjectBoard(main, projectId));
+  bindPaginationBar(main, filters, () => renderProjectBoard(main, projectId), { loadMore: true, pageSize: 150 });
 
   main.querySelectorAll('[data-task-card]').forEach(card => {
     const taskId = Number(card.dataset.taskCard);
 
-    card.addEventListener('click', () => showTaskModal(main, taskId, projectId));
+    card.addEventListener('click', () => {
+      const task = tasks.find(t => t.id === taskId);
+      if (task) showTaskModal(main, task, () => renderProjectBoard(main, projectId));
+    });
 
     card.addEventListener('dragstart', (e) => {
       e.dataTransfer.setData('text/plain', String(taskId));
@@ -1037,22 +1368,19 @@ async function renderProjectBoard(main, projectId) {
   bindTaskProgressBars(main, () => renderProjectBoard(main, projectId));
 }
 
-async function showTaskModal(main, taskId, projectId) {
+// Opens the shared task-detail modal for any task list this app has (Task
+// Board, My Tasks, Project List View...). `task` must already carry its
+// enriched `.project` (as every /api/tasks and /api/projects/:id/tasks
+// response does), so no extra fetch is needed just to open it — clicking any
+// task, from any view, goes straight to its details. `onUpdated()` is called
+// after any change so the calling view can refresh itself.
+function showTaskModal(main, task, onUpdated) {
   const modalRoot = main.querySelector('#task-modal-root');
-  if (!modalRoot) return;
+  if (!modalRoot || !task) return;
 
-  let tasks, project;
-  try {
-    tasks = await api('/projects/' + projectId + '/tasks');
-    project = await api('/projects/' + projectId);
-  } catch (e) {
-    alert(e.message);
-    return;
-  }
-  const task = tasks.find(t => t.id === taskId);
-  if (!task) return;
-
-  const isManager = state.me.isAdmin || project.createdBy === state.me.id;
+  const project = task.project;
+  const taskId = task.id;
+  const isManager = state.me.isAdmin || (project && project.createdBy === state.me.id);
   const canChangeStatus = isManager || task.assigneeId === state.me.id;
 
   function assigneeOptionsForRole(role, selectedId, restrictToSelf) {
@@ -1082,6 +1410,7 @@ async function showTaskModal(main, taskId, projectId) {
       <div class="modal-card">
         <button class="modal-close" id="task-modal-close">&times;</button>
         <h2>${escapeHtml(task.title)}</h2>
+        ${project ? `<p class="hint">${escapeHtml(project.name)}</p>` : ''}
         <span class="badge role-${escapeHtml(task.requiredRole)}">${escapeHtml(task.requiredRole)}</span>
         <p class="subtitle">${escapeHtml(task.description || 'No description')}</p>
         <div class="form-row">
@@ -1094,6 +1423,12 @@ async function showTaskModal(main, taskId, projectId) {
             ${canChangeStatus
               ? `<select class="select-inline" id="task-modal-status">${state.taskStatuses.map(s => `<option value="${escapeHtml(s)}" ${s === task.status ? 'selected' : ''}>${escapeHtml(s)}</option>`).join('')}</select>`
               : `<div><span class="status ${escapeHtml(statusClass(task.status))}">${escapeHtml(task.status)}</span></div>`}
+          </div>
+          <div>
+            <label>Due date</label>
+            ${isManager
+              ? `<input class="select-inline" type="date" id="task-modal-due-date" value="${task.dueDate || ''}" />`
+              : `<div>${formatDate(task.dueDate)}</div>`}
           </div>
         </div>
         <div>
@@ -1110,6 +1445,8 @@ async function showTaskModal(main, taskId, projectId) {
   document.getElementById('task-modal-close').addEventListener('click', close);
   overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
 
+  const refresh = () => { close(); if (onUpdated) onUpdated(taskId); };
+
   const errBox = document.getElementById('task-modal-error');
   const assigneeSelect = document.getElementById('task-modal-assignee');
   if (assigneeSelect) {
@@ -1119,8 +1456,7 @@ async function showTaskModal(main, taskId, projectId) {
           method: 'PATCH',
           body: JSON.stringify({ assigneeId: assigneeSelect.value ? Number(assigneeSelect.value) : null })
         });
-        close();
-        renderProjectBoard(main, projectId);
+        refresh();
       } catch (err) {
         errBox.textContent = err.message;
       }
@@ -1131,17 +1467,24 @@ async function showTaskModal(main, taskId, projectId) {
     statusSelect.addEventListener('change', async () => {
       try {
         await api('/tasks/' + taskId, { method: 'PATCH', body: JSON.stringify({ status: statusSelect.value }) });
-        close();
-        renderProjectBoard(main, projectId);
+        refresh();
       } catch (err) {
         errBox.textContent = err.message;
       }
     });
   }
-  bindTaskProgressBars(modalRoot, () => {
-    close();
-    renderProjectBoard(main, projectId);
-  });
+  const dueDateInput = document.getElementById('task-modal-due-date');
+  if (dueDateInput) {
+    dueDateInput.addEventListener('change', async () => {
+      try {
+        await api('/tasks/' + taskId, { method: 'PATCH', body: JSON.stringify({ dueDate: dueDateInput.value || null }) });
+        refresh();
+      } catch (err) {
+        errBox.textContent = err.message;
+      }
+    });
+  }
+  bindTaskProgressBars(modalRoot, refresh);
 }
 
 // ---------------- PROJECT RFIs ----------------
