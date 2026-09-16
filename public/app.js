@@ -104,6 +104,83 @@ function statCardHtml(iconKey, value, label) {
   `;
 }
 
+// ---------------- TASK PROGRESS BAR (shared by Task Board + task modal) ----------------
+// Same visual language as the Portfolio Timeline's bars, and the same
+// click/drag-to-set interaction as its progress-drag gesture — just applied
+// to a single task instead of a whole project.
+
+function progressColor(pct) {
+  if (pct >= 70) return 'var(--success)';
+  if (pct >= 40) return 'var(--warning)';
+  return 'var(--danger)';
+}
+
+function taskProgressBarHtml(task, editable, size) {
+  const progress = task.progress || 0;
+  const sizeClass = size === 'lg' ? ' task-progress-bar-lg' : '';
+  return `
+    <div class="task-progress-row">
+      <div class="task-progress-bar${sizeClass}${editable ? ' task-progress-bar-editable' : ''}" data-progress-task="${task.id}" data-editable="${editable}" draggable="false">
+        <div class="task-progress-bar-fill" style="width:${progress}%; background:${progressColor(progress)};"></div>
+      </div>
+      <span class="task-progress-label" data-progress-label="${task.id}">${progress}%</span>
+    </div>
+  `;
+}
+
+// Wires up click/drag-to-set on every editable progress bar found inside
+// `container`. `onUpdated(taskId)` is called after a successful save so the
+// caller can refresh whatever else depends on it (e.g. re-render the board).
+function bindTaskProgressBars(container, onUpdated) {
+  container.querySelectorAll('.task-progress-bar-editable').forEach(bar => {
+    const taskId = bar.dataset.progressTask;
+    const fillEl = bar.querySelector('.task-progress-bar-fill');
+    const labelEl = container.querySelector(`[data-progress-label="${taskId}"]`);
+
+    function computeProgress(clientX, rect) {
+      const relativeX = clientX - rect.left;
+      return Math.max(0, Math.min(100, Math.round((relativeX / rect.width) * 100)));
+    }
+
+    function applyVisual(value) {
+      fillEl.style.width = value + '%';
+      fillEl.style.background = progressColor(value);
+      if (labelEl) labelEl.textContent = value + '%';
+    }
+
+    // Stop both the mousedown AND the resulting click from bubbling up —
+    // otherwise a plain click-without-drag still fires a click event on the
+    // card/modal afterward (mousedown and click are separate events), which
+    // would unexpectedly trigger whatever the card's own click does.
+    bar.addEventListener('click', (e) => e.stopPropagation());
+    bar.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const rect = bar.getBoundingClientRect();
+      let value = computeProgress(e.clientX, rect);
+      applyVisual(value);
+
+      function onMove(ev) {
+        value = computeProgress(ev.clientX, rect);
+        applyVisual(value);
+      }
+      async function onUp() {
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+        try {
+          await api('/tasks/' + taskId, { method: 'PATCH', body: JSON.stringify({ progress: value }) });
+          if (onUpdated) onUpdated(taskId);
+        } catch (err) {
+          alert(err.message);
+          if (onUpdated) onUpdated(taskId);
+        }
+      }
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+    });
+  });
+}
+
 function start() {
   if (!state.gateToken) {
     renderGateScreen();
@@ -888,7 +965,6 @@ async function renderProjectBoard(main, projectId) {
     const cardsHtml = columnTasks.map(t => {
       const canDrag = isManager || t.assigneeId === state.me.id;
       const canEditProgress = canDrag; // same rule: assignee or this project's manager
-      const progress = t.progress || 0;
       return `
         <div class="board-card" data-task-card="${t.id}" ${canDrag ? 'draggable="true"' : ''}>
           <div class="board-card-title">${escapeHtml(t.title)}</div>
@@ -896,12 +972,7 @@ async function renderProjectBoard(main, projectId) {
             <span class="badge role-${escapeHtml(t.requiredRole)}">${escapeHtml(t.requiredRole)}</span>
             <span>${t.assignee ? escapeHtml(t.assignee.name) : 'Unassigned'}</span>
           </div>
-          <div class="board-card-progress">
-            <div class="gantt-progress-track"><div class="gantt-progress-fill" style="width:${progress}%; background:var(--primary);"></div></div>
-            ${canEditProgress
-              ? `<input type="number" class="board-card-progress-input" data-progress-task="${t.id}" value="${progress}" min="0" max="100" draggable="false" />`
-              : `<span class="hint">${progress}%</span>`}
-          </div>
+          ${taskProgressBarHtml(t, canEditProgress, 'sm')}
         </div>
       `;
     }).join('');
@@ -963,26 +1034,7 @@ async function renderProjectBoard(main, projectId) {
     });
   });
 
-  main.querySelectorAll('.board-card-progress-input').forEach(input => {
-    // Keep clicks/drags on the input from bubbling up to the card's own
-    // click-to-open-modal and native drag handlers.
-    input.addEventListener('click', (e) => e.stopPropagation());
-    input.addEventListener('mousedown', (e) => e.stopPropagation());
-    input.addEventListener('change', async () => {
-      const value = Number(input.value);
-      if (Number.isNaN(value) || value < 0 || value > 100) {
-        input.value = 0;
-        return;
-      }
-      try {
-        await api('/tasks/' + input.dataset.progressTask, { method: 'PATCH', body: JSON.stringify({ progress: value }) });
-        renderProjectBoard(main, projectId);
-      } catch (err) {
-        alert(err.message);
-        renderProjectBoard(main, projectId);
-      }
-    });
-  });
+  bindTaskProgressBars(main, () => renderProjectBoard(main, projectId));
 }
 
 async function showTaskModal(main, taskId, projectId) {
@@ -1046,12 +1098,7 @@ async function showTaskModal(main, taskId, projectId) {
         </div>
         <div>
           <label>Progress</label>
-          ${canChangeStatus
-            ? `<div style="display:flex; align-items:center; gap:0.7rem;">
-                 <input type="range" id="task-modal-progress" min="0" max="100" step="5" value="${task.progress || 0}" style="flex:1;" />
-                 <span class="hint" id="task-modal-progress-value" style="min-width:2.5em;">${task.progress || 0}%</span>
-               </div>`
-            : `<div class="gantt-progress-track"><div class="gantt-progress-fill" style="width:${task.progress || 0}%; background:var(--primary);"></div></div>`}
+          ${taskProgressBarHtml(task, canChangeStatus, 'lg')}
         </div>
         <div id="task-modal-error" class="error-text"></div>
       </div>
@@ -1091,22 +1138,10 @@ async function showTaskModal(main, taskId, projectId) {
       }
     });
   }
-  const progressSlider = document.getElementById('task-modal-progress');
-  if (progressSlider) {
-    const progressValueEl = document.getElementById('task-modal-progress-value');
-    progressSlider.addEventListener('input', () => {
-      progressValueEl.textContent = progressSlider.value + '%';
-    });
-    progressSlider.addEventListener('change', async () => {
-      try {
-        await api('/tasks/' + taskId, { method: 'PATCH', body: JSON.stringify({ progress: Number(progressSlider.value) }) });
-        close();
-        renderProjectBoard(main, projectId);
-      } catch (err) {
-        errBox.textContent = err.message;
-      }
-    });
-  }
+  bindTaskProgressBars(modalRoot, () => {
+    close();
+    renderProjectBoard(main, projectId);
+  });
 }
 
 // ---------------- PROJECT RFIs ----------------

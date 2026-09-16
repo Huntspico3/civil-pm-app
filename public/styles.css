@@ -609,19 +609,43 @@ body.gantt-dragging { user-select: none; }
   color: var(--text-muted);
 }
 
-.board-card-progress {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  margin-top: 0.55rem;
+/* ============ TASK PROGRESS BAR ============ */
+/* Same visual language as the Gantt bar (rounded, solid fill, soft shadow),
+   and the same click/drag-to-set interaction — reused on Task Board cards
+   and in the task details modal so progress looks and behaves identically
+   everywhere it appears. */
+
+.task-progress-row { display: flex; align-items: center; gap: 0.55rem; margin-top: 0.55rem; }
+
+.task-progress-bar {
+  position: relative;
+  flex: 1;
+  height: 10px;
+  border-radius: 999px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  overflow: hidden;
 }
-.board-card-progress .gantt-progress-track { flex: 1; }
-.board-card-progress-input {
-  width: 3.2em;
-  padding: 0.15rem 0.3rem;
-  font-size: 0.76rem;
+.task-progress-bar-editable { cursor: pointer; }
+.task-progress-bar-editable:hover { border-color: var(--border-strong); }
+.task-progress-bar-lg { height: 22px; }
+
+.task-progress-bar-fill {
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  border-radius: 999px;
+  transition: width 0.08s ease, background 0.15s ease;
+  box-shadow: var(--shadow-sm);
+}
+
+.task-progress-label {
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--text-muted);
+  min-width: 2.4em;
   text-align: right;
-  cursor: text;
 }
 
 /* ============ RFIs ============ */
