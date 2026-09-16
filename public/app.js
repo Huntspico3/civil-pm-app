@@ -289,7 +289,7 @@ function renderShell() {
           <div>
             <div class="sidebar-user-name">${escapeHtml(state.me.name)}</div>
             <div class="sidebar-user-badges">
-              <span class="badge role-${state.me.role}">${state.me.role}</span>
+              <span class="badge role-${escapeHtml(state.me.role)}">${escapeHtml(state.me.role)}</span>
               ${state.me.isAdmin ? '<span class="badge admin">Admin</span>' : ''}
             </div>
           </div>
@@ -337,7 +337,7 @@ async function renderContacts(main) {
   const rows = users.map(u => `
     <tr>
       <td>${escapeHtml(u.name)}</td>
-      <td><span class="badge role-${u.role}">${u.role}</span></td>
+      <td><span class="badge role-${escapeHtml(u.role)}">${escapeHtml(u.role)}</span></td>
       <td><a href="mailto:${encodeURIComponent(u.email)}">${escapeHtml(u.email)}</a></td>
       <td>${u.phone ? `<a href="tel:${encodeURIComponent(u.phone)}">${escapeHtml(u.phone)}</a>` : '<span class="hint">—</span>'}</td>
     </tr>
@@ -450,9 +450,9 @@ async function renderDashboard(main) {
                   <tr>
                     <td>${escapeHtml(t.title)}</td>
                     <td>${projectLink(t.project)}</td>
-                    <td><span class="badge role-${t.requiredRole}">${t.requiredRole}</span></td>
+                    <td><span class="badge role-${escapeHtml(t.requiredRole)}">${escapeHtml(t.requiredRole)}</span></td>
                     <td>${t.assignee ? escapeHtml(t.assignee.name) : '<span class="hint">Unassigned</span>'}</td>
-                    <td><span class="status ${statusClass(t.status)}">${t.status}</span></td>
+                    <td><span class="status ${escapeHtml(statusClass(t.status))}">${escapeHtml(t.status)}</span></td>
                   </tr>
                 `).join('')}
               </tbody>
@@ -553,8 +553,8 @@ async function renderMyTasks(main) {
               ${list.map(t => `
                 <tr>
                   <td>${escapeHtml(t.title)}</td>
-                  <td><span class="badge role-${t.requiredRole}">${t.requiredRole}</span></td>
-                  <td><span class="status ${statusClass(t.status)}">${t.status}</span></td>
+                  <td><span class="badge role-${escapeHtml(t.requiredRole)}">${escapeHtml(t.requiredRole)}</span></td>
+                  <td><span class="status ${escapeHtml(statusClass(t.status))}">${escapeHtml(t.status)}</span></td>
                 </tr>
               `).join('')}
             </tbody>
@@ -598,14 +598,14 @@ async function renderProjects(main) {
           <h3>${escapeHtml(p.name)}</h3>
           <p>${escapeHtml(p.description || 'No description')}</p>
           <div class="meta">
-            <span class="badge stage-${p.stage}">${p.stage}</span>
+            <span class="badge stage-${escapeHtml(p.stage)}">${escapeHtml(p.stage)}</span>
             <span>${p.taskCount} task${p.taskCount === 1 ? '' : 's'}</span>
             <span>${p.myTaskCount} assigned to you</span>
           </div>
         </div>
       `).join('')}</div>`;
 
-  const stageOptions = state.stages.map(s => `<option value="${s}">${s}</option>`).join('');
+  const stageOptions = state.stages.map(s => `<option value="${escapeHtml(s)}">${escapeHtml(s)}</option>`).join('');
 
   main.innerHTML = `
     <div class="section-header">
@@ -695,7 +695,7 @@ async function renderProjectDetail(main, projectId) {
 
   const isManager = state.me.isAdmin || project.createdBy === state.me.id;
 
-  const roleOptions = state.roles.map(r => `<option value="${r}">${r}</option>`).join('');
+  const roleOptions = state.roles.map(r => `<option value="${escapeHtml(r)}">${escapeHtml(r)}</option>`).join('');
 
   function assigneeOptionsForRole(role, selectedId, restrictToSelf) {
     const sel = (id) => (selectedId != null && Number(selectedId) === id) ? ' selected' : '';
@@ -713,7 +713,7 @@ async function renderProjectDetail(main, projectId) {
     }
     if (others.length) {
       html += `<optgroup label="Other team members">` +
-        others.map(u => `<option value="${u.id}"${sel(u.id)}>${escapeHtml(u.name)} (${u.role})</option>`).join('') +
+        others.map(u => `<option value="${u.id}"${sel(u.id)}>${escapeHtml(u.name)} (${escapeHtml(u.role)})</option>`).join('') +
         `</optgroup>`;
     }
     return html;
@@ -729,16 +729,16 @@ async function renderProjectDetail(main, projectId) {
               <strong>${escapeHtml(t.title)}</strong>
               ${t.description ? `<div class="hint">${escapeHtml(t.description)}</div>` : ''}
             </td>
-            <td><span class="badge role-${t.requiredRole}">${t.requiredRole}</span></td>
+            <td><span class="badge role-${escapeHtml(t.requiredRole)}">${escapeHtml(t.requiredRole)}</span></td>
             <td>
               <select class="select-inline" data-action="reassign" data-task="${t.id}">${assigneeOptionsForRole(t.requiredRole, t.assigneeId, !isManager)}</select>
             </td>
             <td>
               ${canChangeStatus
                 ? `<select class="select-inline" data-action="status" data-task="${t.id}">
-                    ${state.taskStatuses.map(s => `<option value="${s}" ${s === t.status ? 'selected' : ''}>${s}</option>`).join('')}
+                    ${state.taskStatuses.map(s => `<option value="${escapeHtml(s)}" ${s === t.status ? 'selected' : ''}>${escapeHtml(s)}</option>`).join('')}
                   </select>`
-                : `<span class="status ${statusClass(t.status)}">${t.status}</span>`}
+                : `<span class="status ${escapeHtml(statusClass(t.status))}">${escapeHtml(t.status)}</span>`}
             </td>
           </tr>
         `;
@@ -891,7 +891,7 @@ async function renderProjectBoard(main, projectId) {
         <div class="board-card" data-task-card="${t.id}" ${canDrag ? 'draggable="true"' : ''}>
           <div class="board-card-title">${escapeHtml(t.title)}</div>
           <div class="board-card-meta">
-            <span class="badge role-${t.requiredRole}">${t.requiredRole}</span>
+            <span class="badge role-${escapeHtml(t.requiredRole)}">${escapeHtml(t.requiredRole)}</span>
             <span>${t.assignee ? escapeHtml(t.assignee.name) : 'Unassigned'}</span>
           </div>
         </div>
@@ -990,7 +990,7 @@ async function showTaskModal(main, taskId, projectId) {
     }
     if (others.length) {
       html += `<optgroup label="Other team members">` +
-        others.map(u => `<option value="${u.id}"${sel(u.id)}>${escapeHtml(u.name)} (${u.role})</option>`).join('') +
+        others.map(u => `<option value="${u.id}"${sel(u.id)}>${escapeHtml(u.name)} (${escapeHtml(u.role)})</option>`).join('') +
         `</optgroup>`;
     }
     return html;
@@ -1001,7 +1001,7 @@ async function showTaskModal(main, taskId, projectId) {
       <div class="modal-card">
         <button class="modal-close" id="task-modal-close">&times;</button>
         <h2>${escapeHtml(task.title)}</h2>
-        <span class="badge role-${task.requiredRole}">${task.requiredRole}</span>
+        <span class="badge role-${escapeHtml(task.requiredRole)}">${escapeHtml(task.requiredRole)}</span>
         <p class="subtitle">${escapeHtml(task.description || 'No description')}</p>
         <div class="form-row">
           <div>
@@ -1011,8 +1011,8 @@ async function showTaskModal(main, taskId, projectId) {
           <div>
             <label>Status</label>
             ${canChangeStatus
-              ? `<select class="select-inline" id="task-modal-status">${state.taskStatuses.map(s => `<option value="${s}" ${s === task.status ? 'selected' : ''}>${s}</option>`).join('')}</select>`
-              : `<div><span class="status ${statusClass(task.status)}">${task.status}</span></div>`}
+              ? `<select class="select-inline" id="task-modal-status">${state.taskStatuses.map(s => `<option value="${escapeHtml(s)}" ${s === task.status ? 'selected' : ''}>${escapeHtml(s)}</option>`).join('')}</select>`
+              : `<div><span class="status ${escapeHtml(statusClass(task.status))}">${escapeHtml(task.status)}</span></div>`}
           </div>
         </div>
         <div id="task-modal-error" class="error-text"></div>
@@ -1092,7 +1092,7 @@ async function renderProjectRfis(main, projectId) {
             <div class="rfi-meta">
               <span>Assigned to <strong>${escapeHtml(r.assignee ? r.assignee.name : 'Unknown')}</strong></span>
               <span>Due ${formatDate(r.dueDate)}</span>
-              <span class="status ${statusClass(r.status)}">${r.status}</span>
+              <span class="status ${escapeHtml(statusClass(r.status))}">${escapeHtml(r.status)}</span>
               ${r.overdue ? '<span class="badge badge-overdue">Overdue</span>' : ''}
             </div>
             ${answerBlockHtml}
@@ -1181,14 +1181,14 @@ async function renderTeam(main) {
     return;
   }
 
-  const roleOptions = state.roles.map(r => `<option value="${r}">${r}</option>`).join('');
+  const roleOptions = state.roles.map(r => `<option value="${escapeHtml(r)}">${escapeHtml(r)}</option>`).join('');
 
   const rows = users.map(u => `
     <tr>
       <td>${escapeHtml(u.name)}</td>
       <td>${escapeHtml(u.email)}</td>
       <td>${u.phone ? escapeHtml(u.phone) : '<span class="hint">—</span>'}</td>
-      <td><span class="badge role-${u.role}">${u.role}</span></td>
+      <td><span class="badge role-${escapeHtml(u.role)}">${escapeHtml(u.role)}</span></td>
       <td>${u.isAdmin ? '<span class="badge admin">Admin</span>' : ''}</td>
     </tr>
   `).join('');
@@ -1284,7 +1284,7 @@ function optionListSectionHtml(cfg, list) {
       <div class="option-list">
         ${list.length === 0 ? '<p class="hint">No options yet.</p>' : list.map(v => `
           <div class="option-row">
-            <span class="badge ${cfg.badgeClass(v)}">${escapeHtml(v)}</span>
+            <span class="badge ${escapeHtml(cfg.badgeClass(v))}">${escapeHtml(v)}</span>
             <button class="btn small secondary" data-remove-option data-settings-key="${cfg.key}" data-value="${escapeHtml(v)}">Remove</button>
           </div>
         `).join('')}
@@ -1431,7 +1431,7 @@ async function renderPortfolio(main) {
       <div class="gantt-row">
         <div class="gantt-label">
           <div>${escapeHtml(p.name)}</div>
-          <span class="badge stage-${p.stage}">${p.stage}</span>
+          <span class="badge stage-${escapeHtml(p.stage)}">${escapeHtml(p.stage)}</span>
           <div class="gantt-progress-track"><div class="gantt-progress-fill" style="width:${progress}%; background:${color};"></div></div>
           <span class="hint gantt-progress-pct">${progress}% complete</span>
         </div>
@@ -1659,7 +1659,7 @@ function showProjectModal(project, boardMain) {
     : `<ul class="modal-team-list">${project.team.map(u => `
         <li>
           <span>${escapeHtml(u.name)}</span>
-          <span class="badge role-${u.role}">${u.role}</span>
+          <span class="badge role-${escapeHtml(u.role)}">${escapeHtml(u.role)}</span>
         </li>
       `).join('')}</ul>`;
 
@@ -1691,7 +1691,7 @@ function showProjectModal(project, boardMain) {
       <div class="modal-card">
         <button class="modal-close" id="project-modal-close">&times;</button>
         <h2>${escapeHtml(project.name)}</h2>
-        <span class="badge stage-${project.stage}">${project.stage}</span>
+        <span class="badge stage-${escapeHtml(project.stage)}">${escapeHtml(project.stage)}</span>
         <p class="subtitle">${escapeHtml(project.description || '')}</p>
         <div class="modal-dates">
           <div><label>Start Date</label><div>${formatDate(project.startDate)}</div></div>
