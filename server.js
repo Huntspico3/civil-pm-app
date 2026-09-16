@@ -159,12 +159,16 @@ function enforceDetectedExtension(file, detectedExt) {
 // status change anywhere in the app is reflected the next time progress is read
 // — no event wiring needed. The last entry in data.taskStatuses (the rightmost
 // Kanban column) is treated as "done", so this still works if an admin renames it.
+// Averages each task's own 0-100 progress (set by its assignee or a manager),
+// rather than just counting how many are "Done" — so a task that's 60% along
+// contributes 60%, not 0%, giving a more granular reading of real progress.
 function computeAutoProgress(projectId, data) {
   const projectTasks = data.tasks.filter(t => t.projectId === projectId);
   if (projectTasks.length === 0) return { progress: 0, done: 0, total: 0 };
   const doneStatus = data.taskStatuses[data.taskStatuses.length - 1];
   const done = projectTasks.filter(t => t.status === doneStatus).length;
-  return { progress: Math.round((done / projectTasks.length) * 100), done, total: projectTasks.length };
+  const avg = projectTasks.reduce((sum, t) => sum + (typeof t.progress === 'number' ? t.progress : 0), 0) / projectTasks.length;
+  return { progress: Math.round(avg), done, total: projectTasks.length };
 }
 
 // A project stays on auto-calculated progress until a user drags its bar (or
@@ -411,7 +415,8 @@ app.post('/api/projects/:id/tasks', requireAuth, (req, res) => {
     description: description || '',
     requiredRole,
     assigneeId: assignee ? assignee.id : null,
-    status: data.taskStatuses[0]
+    status: data.taskStatuses[0],
+    progress: 0
   };
   data.tasks.push(task);
   db.save(data);
@@ -425,7 +430,7 @@ app.patch('/api/tasks/:id', requireAuth, (req, res) => {
   const project = data.projects.find(p => p.id === task.projectId);
   const isManager = req.user.isAdmin || project.createdBy === req.user.id;
   const isAssignee = task.assigneeId === req.user.id;
-  const { assigneeId, status, title, description, requiredRole } = req.body;
+  const { assigneeId, status, title, description, requiredRole, progress } = req.body;
 
   // A non-manager may still assign a task to themselves (claiming unassigned
   // work), so that alone must be enough to pass the general edit gate below.
@@ -449,6 +454,12 @@ app.patch('/api/tasks/:id', requireAuth, (req, res) => {
   if (status !== undefined) {
     if (!data.taskStatuses.includes(status)) return res.status(400).json({ error: 'Invalid status' });
     task.status = status;
+  }
+  if (progress !== undefined) {
+    if (typeof progress !== 'number' || progress < 0 || progress > 100) {
+      return res.status(400).json({ error: 'Progress must be a number between 0 and 100' });
+    }
+    task.progress = Math.round(progress);
   }
   if (isManager && title !== undefined) task.title = title;
   if (isManager && description !== undefined) task.description = description;
@@ -779,8 +790,12 @@ app.patch('/api/rfis/:id', requireAuth, (req, res) => {
   const rfi = data.rfis.find(r => r.id === Number(req.params.id));
   if (!rfi) return res.status(404).json({ error: 'RFI not found' });
 
-  const canAnswer = rfi.assignedTo === req.user.id || isManager(req.user, data);
-  if (!canAnswer) return res.status(403).json({ error: 'Only the assigned team member (or a project manager) can answer this RFI' });
+  // Scoped to *this* RFI's own project — a manager of some other project
+  // shouldn't be able to answer RFIs on projects they have no relationship to.
+  const rfiProject = data.projects.find(p => p.id === rfi.projectId);
+  const isThisProjectManager = req.user.isAdmin || (rfiProject && rfiProject.createdBy === req.user.id);
+  const canAnswer = rfi.assignedTo === req.user.id || isThisProjectManager;
+  if (!canAnswer) return res.status(403).json({ error: 'Only the assigned team member (or this project\'s manager) can answer this RFI' });
 
   const { answer } = req.body;
   if (!answer || !answer.trim()) return res.status(400).json({ error: 'Answer text is required' });

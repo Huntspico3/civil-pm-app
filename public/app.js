@@ -749,7 +749,7 @@ async function renderProjectDetail(main, projectId) {
     <h1>${escapeHtml(project.name)}</h1>
     <p class="subtitle">${escapeHtml(project.description || '')}</p>
     <div class="gantt-progress-track" style="max-width:260px;"><div class="gantt-progress-fill" style="width:${project.progress || 0}%; background:${project.color || '#1e3a5f'};"></div></div>
-    <p class="hint">${project.progress || 0}% complete${project.progressMode === 'manual' ? ' (manual override)' : ` (auto — ${project.taskProgress ? project.taskProgress.done : 0} of ${project.taskProgress ? project.taskProgress.total : 0} tasks done)`}</p>
+    <p class="hint">${project.progress || 0}% complete${project.progressMode === 'manual' ? ' (manual override)' : ` (auto — average across ${project.taskProgress ? project.taskProgress.total : 0} task${project.taskProgress && project.taskProgress.total === 1 ? '' : 's'})`}</p>
     ${projectTabsHtml('project')}
 
     <div class="card">
@@ -887,12 +887,20 @@ async function renderProjectBoard(main, projectId) {
     const columnTasks = tasks.filter(t => t.status === status);
     const cardsHtml = columnTasks.map(t => {
       const canDrag = isManager || t.assigneeId === state.me.id;
+      const canEditProgress = canDrag; // same rule: assignee or this project's manager
+      const progress = t.progress || 0;
       return `
         <div class="board-card" data-task-card="${t.id}" ${canDrag ? 'draggable="true"' : ''}>
           <div class="board-card-title">${escapeHtml(t.title)}</div>
           <div class="board-card-meta">
             <span class="badge role-${escapeHtml(t.requiredRole)}">${escapeHtml(t.requiredRole)}</span>
             <span>${t.assignee ? escapeHtml(t.assignee.name) : 'Unassigned'}</span>
+          </div>
+          <div class="board-card-progress">
+            <div class="gantt-progress-track"><div class="gantt-progress-fill" style="width:${progress}%; background:var(--primary);"></div></div>
+            ${canEditProgress
+              ? `<input type="number" class="board-card-progress-input" data-progress-task="${t.id}" value="${progress}" min="0" max="100" draggable="false" />`
+              : `<span class="hint">${progress}%</span>`}
           </div>
         </div>
       `;
@@ -947,6 +955,27 @@ async function renderProjectBoard(main, projectId) {
       const newStatus = column.dataset.dropStatus;
       try {
         await api('/tasks/' + taskId, { method: 'PATCH', body: JSON.stringify({ status: newStatus }) });
+        renderProjectBoard(main, projectId);
+      } catch (err) {
+        alert(err.message);
+        renderProjectBoard(main, projectId);
+      }
+    });
+  });
+
+  main.querySelectorAll('.board-card-progress-input').forEach(input => {
+    // Keep clicks/drags on the input from bubbling up to the card's own
+    // click-to-open-modal and native drag handlers.
+    input.addEventListener('click', (e) => e.stopPropagation());
+    input.addEventListener('mousedown', (e) => e.stopPropagation());
+    input.addEventListener('change', async () => {
+      const value = Number(input.value);
+      if (Number.isNaN(value) || value < 0 || value > 100) {
+        input.value = 0;
+        return;
+      }
+      try {
+        await api('/tasks/' + input.dataset.progressTask, { method: 'PATCH', body: JSON.stringify({ progress: value }) });
         renderProjectBoard(main, projectId);
       } catch (err) {
         alert(err.message);
@@ -1015,6 +1044,15 @@ async function showTaskModal(main, taskId, projectId) {
               : `<div><span class="status ${escapeHtml(statusClass(task.status))}">${escapeHtml(task.status)}</span></div>`}
           </div>
         </div>
+        <div>
+          <label>Progress</label>
+          ${canChangeStatus
+            ? `<div style="display:flex; align-items:center; gap:0.7rem;">
+                 <input type="range" id="task-modal-progress" min="0" max="100" step="5" value="${task.progress || 0}" style="flex:1;" />
+                 <span class="hint" id="task-modal-progress-value" style="min-width:2.5em;">${task.progress || 0}%</span>
+               </div>`
+            : `<div class="gantt-progress-track"><div class="gantt-progress-fill" style="width:${task.progress || 0}%; background:var(--primary);"></div></div>`}
+        </div>
         <div id="task-modal-error" class="error-text"></div>
       </div>
     </div>
@@ -1046,6 +1084,22 @@ async function showTaskModal(main, taskId, projectId) {
     statusSelect.addEventListener('change', async () => {
       try {
         await api('/tasks/' + taskId, { method: 'PATCH', body: JSON.stringify({ status: statusSelect.value }) });
+        close();
+        renderProjectBoard(main, projectId);
+      } catch (err) {
+        errBox.textContent = err.message;
+      }
+    });
+  }
+  const progressSlider = document.getElementById('task-modal-progress');
+  if (progressSlider) {
+    const progressValueEl = document.getElementById('task-modal-progress-value');
+    progressSlider.addEventListener('input', () => {
+      progressValueEl.textContent = progressSlider.value + '%';
+    });
+    progressSlider.addEventListener('change', async () => {
+      try {
+        await api('/tasks/' + taskId, { method: 'PATCH', body: JSON.stringify({ progress: Number(progressSlider.value) }) });
         close();
         renderProjectBoard(main, projectId);
       } catch (err) {
@@ -1652,7 +1706,7 @@ function showProjectModal(project, boardMain) {
   const taskProgress = project.taskProgress || { done: 0, total: 0 };
   const progressHint = isManualProgress
     ? 'Manually set — overrides the automatic calculation.'
-    : `Calculated automatically: ${taskProgress.done} of ${taskProgress.total} task${taskProgress.total === 1 ? '' : 's'} done.`;
+    : `Calculated automatically: average progress across ${taskProgress.total} task${taskProgress.total === 1 ? '' : 's'} (${taskProgress.done} fully done).`;
 
   const teamHtml = project.team.length === 0
     ? `<p class="hint">No team members assigned yet.</p>`

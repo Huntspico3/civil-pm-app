@@ -609,6 +609,21 @@ body.gantt-dragging { user-select: none; }
   color: var(--text-muted);
 }
 
+.board-card-progress {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.55rem;
+}
+.board-card-progress .gantt-progress-track { flex: 1; }
+.board-card-progress-input {
+  width: 3.2em;
+  padding: 0.15rem 0.3rem;
+  font-size: 0.76rem;
+  text-align: right;
+  cursor: text;
+}
+
 /* ============ RFIs ============ */
 
 .rfi-card { margin-bottom: 1rem; }

@@ -93,13 +93,13 @@ function seed() {
       }
     ],
     tasks: [
-      { id: 1, projectId: 1, title: 'Deck load rating analysis', description: 'Run updated load rating for the bridge deck.', requiredRole: 'Structural', assigneeId: 2, status: 'In Progress' },
-      { id: 2, projectId: 1, title: 'Pier foundation soil report', description: 'Review boring logs and assess pier settlement risk.', requiredRole: 'Geotechnical', assigneeId: 3, status: 'To Do' },
-      { id: 3, projectId: 1, title: 'Erosion control plan', description: 'Draft erosion & sediment control plan for the riverbank work zone.', requiredRole: 'Environmental', assigneeId: 4, status: 'To Do' },
-      { id: 4, projectId: 2, title: 'Storm drainage design', description: 'Size new storm drains for the widened corridor.', requiredRole: 'Civil', assigneeId: 1, status: 'To Do' },
-      { id: 5, projectId: 2, title: 'Signal timing plan', description: 'Develop signal timing plan for the two new intersections.', requiredRole: 'Transportation', assigneeId: 5, status: 'In Progress' },
-      { id: 6, projectId: 2, title: 'Retaining wall check', description: 'Check retaining wall stability near station 3+00.', requiredRole: 'Structural', assigneeId: 2, status: 'Done' },
-      { id: 7, projectId: 2, title: 'Wetland impact review', description: 'Assess corridor impact on adjacent wetland buffer.', requiredRole: 'Environmental', assigneeId: null, status: 'To Do' }
+      { id: 1, projectId: 1, title: 'Deck load rating analysis', description: 'Run updated load rating for the bridge deck.', requiredRole: 'Structural', assigneeId: 2, status: 'In Progress', progress: 40 },
+      { id: 2, projectId: 1, title: 'Pier foundation soil report', description: 'Review boring logs and assess pier settlement risk.', requiredRole: 'Geotechnical', assigneeId: 3, status: 'To Do', progress: 0 },
+      { id: 3, projectId: 1, title: 'Erosion control plan', description: 'Draft erosion & sediment control plan for the riverbank work zone.', requiredRole: 'Environmental', assigneeId: 4, status: 'To Do', progress: 0 },
+      { id: 4, projectId: 2, title: 'Storm drainage design', description: 'Size new storm drains for the widened corridor.', requiredRole: 'Civil', assigneeId: 1, status: 'To Do', progress: 0 },
+      { id: 5, projectId: 2, title: 'Signal timing plan', description: 'Develop signal timing plan for the two new intersections.', requiredRole: 'Transportation', assigneeId: 5, status: 'In Progress', progress: 60 },
+      { id: 6, projectId: 2, title: 'Retaining wall check', description: 'Check retaining wall stability near station 3+00.', requiredRole: 'Structural', assigneeId: 2, status: 'Done', progress: 100 },
+      { id: 7, projectId: 2, title: 'Wetland impact review', description: 'Assess corridor impact on adjacent wetland buffer.', requiredRole: 'Environmental', assigneeId: null, status: 'To Do', progress: 0 }
     ],
     externalContacts: [
       { id: 1, name: 'John Carter', company: 'ABC Groundworks Ltd', category: 'Subcontractor', phone: '555-0201', email: 'john.carter@abcgroundworks.example', projectId: 2 },
@@ -233,6 +233,21 @@ function backfillSchema(data) {
         // Existing projects predate auto-calculated progress — default them to
         // automatic so progress reflects real task completion going forward.
         p.progressMode = 'auto';
+        changed = true;
+      }
+    });
+  }
+  // Tasks created before per-task progress existed won't have it yet. Default
+  // to 0 would suddenly crater every project's auto-calculated progress, so
+  // instead estimate from the task's current status position (e.g. "Done" in
+  // a 4-column board defaults to 100%, "To Do" to 0%) as a reasonable
+  // starting point — the assignee can then fine-tune the real number.
+  if (Array.isArray(data.tasks)) {
+    const statusCount = data.taskStatuses.length;
+    data.tasks.forEach(t => {
+      if (typeof t.progress !== 'number') {
+        const index = data.taskStatuses.indexOf(t.status);
+        t.progress = statusCount > 1 && index >= 0 ? Math.round((index / (statusCount - 1)) * 100) : 0;
         changed = true;
       }
     });
