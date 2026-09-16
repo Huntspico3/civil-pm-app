@@ -6,6 +6,8 @@ const multer = require('multer');
 const db = require('./db');
 const ai = require('./ai');
 const email = require('./email');
+const auth = require('./auth');
+const fileValidation = require('./fileValidation');
 
 const UPLOADS_DIR = path.join(db.DATA_DIR, 'uploads');
 fs.mkdirSync(UPLOADS_DIR, { recursive: true });
@@ -30,7 +32,6 @@ const upload = multer({
 const app = express();
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
-app.use('/uploads', express.static(UPLOADS_DIR));
 
 // --- shared trial gate: one shared password required before the individual login screen ---
 // Tokens are kept in memory only, so everyone is asked for the password again after a server restart.
@@ -50,25 +51,63 @@ app.post('/api/gate/verify', (req, res) => {
   res.json({ token });
 });
 
-app.use('/api', (req, res, next) => {
-  if (req.path === '/gate/verify') return next();
+function requireGateToken(req, res, next) {
   const token = req.headers['x-gate-token'];
   if (!token || !gateTokens.has(token)) {
     return res.status(401).json({ error: 'Shared password required', gateRequired: true });
   }
   next();
+}
+
+app.use('/api', (req, res, next) => {
+  if (req.path === '/gate/verify') return next();
+  requireGateToken(req, res, next);
 });
 
-// --- auth: identity is selected on the login screen, sent as x-user-id header ---
+// --- auth: identity comes from a server-issued session token, never a client-claimed id ---
 function attachUser(req, res, next) {
-  const idHeader = req.headers['x-user-id'];
-  if (!idHeader) return next();
-  const data = db.load();
-  const user = data.users.find(u => u.id === Number(idHeader));
-  if (user) req.user = user;
+  const token = req.headers['x-session-token'];
+  const session = auth.getSession(token);
+  if (session) {
+    const data = db.load();
+    const user = data.users.find(u => u.id === session.userId);
+    if (user) req.user = user;
+  }
   next();
 }
 app.use(attachUser);
+
+// Uploaded photos/audio are real user content, not part of the public app
+// shell — require the same shared-password gate and a logged-in session
+// before serving any of them, same as every other piece of app data.
+app.use('/uploads', requireGateToken, (req, res, next) => {
+  if (!req.user) return res.status(401).json({ error: 'Not logged in' });
+  next();
+}, express.static(UPLOADS_DIR));
+
+app.post('/api/login', (req, res) => {
+  const { email: rawEmail, password } = req.body;
+  const email = typeof rawEmail === 'string' ? rawEmail.trim().toLowerCase() : '';
+  if (!email || !password) return res.status(400).json({ error: 'Email and password are required' });
+
+  const data = db.load();
+  const user = data.users.find(u => u.email.toLowerCase() === email);
+  const credential = user ? data.userCredentials.find(c => c.userId === user.id) : null;
+
+  // Same generic message whether the email doesn't exist or the password is
+  // wrong, so a failed attempt doesn't reveal which one was incorrect.
+  if (!user || !credential || !auth.verifyPassword(password, credential.passwordHash)) {
+    return res.status(401).json({ error: 'Incorrect email or password' });
+  }
+
+  const token = auth.createSession(user.id);
+  res.json({ token, user });
+});
+
+app.post('/api/logout', (req, res) => {
+  auth.destroySession(req.headers['x-session-token']);
+  res.json({ ok: true });
+});
 
 function requireAuth(req, res, next) {
   if (!req.user) return res.status(401).json({ error: 'Not logged in' });
@@ -103,6 +142,18 @@ function canSeeProject(user, project, tasks) {
 
 const HEX_COLOR_RE = /^#[0-9a-fA-F]{6}$/;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+// Renames an already-uploaded file on disk (and updates the multer file object
+// in place) so its extension matches its actual detected content type.
+function enforceDetectedExtension(file, detectedExt) {
+  const currentExt = path.extname(file.filename);
+  if (currentExt.toLowerCase() === detectedExt) return;
+  const newFilename = path.basename(file.filename, currentExt) + detectedExt;
+  const newPath = path.join(path.dirname(file.path), newFilename);
+  fs.renameSync(file.path, newPath);
+  file.filename = newFilename;
+  file.path = newPath;
+}
 
 // Progress is computed live from task statuses rather than cached, so a task
 // status change anywhere in the app is reflected the next time progress is read
@@ -198,8 +249,11 @@ app.get('/api/users', (req, res) => {
 });
 
 app.post('/api/users', requireAdmin, (req, res) => {
-  const { name, email, phone, role } = req.body;
-  if (!name || !email || !role) return res.status(400).json({ error: 'name, email, and role are required' });
+  const { name, email, phone, role, password } = req.body;
+  if (!name || !email || !role || !password) {
+    return res.status(400).json({ error: 'name, email, role, and password are required' });
+  }
+  if (password.length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters' });
   const data = db.load();
   if (!data.roles.includes(role)) return res.status(400).json({ error: 'Invalid role' });
   if (data.users.some(u => u.email.toLowerCase() === String(email).toLowerCase())) {
@@ -207,6 +261,7 @@ app.post('/api/users', requireAdmin, (req, res) => {
   }
   const user = { id: db.nextId('user'), name, email, phone: phone || '', role, isAdmin: false };
   data.users.push(user);
+  data.userCredentials.push({ userId: user.id, passwordHash: auth.hashPassword(password) });
   db.save(data);
   res.status(201).json(user);
 });
@@ -535,6 +590,28 @@ app.post('/api/reports', requireAuth, upload.fields([{ name: 'audio', maxCount: 
       return res.status(400).json({ error: 'A voice note (audio file) is required' });
     }
     const photoFiles = req.files.photos || [];
+
+    // multer's fileFilter only trusts the browser-reported Content-Type, which
+    // an attacker fully controls — check the actual file bytes before doing
+    // anything else with what was uploaded. The stored extension is then
+    // reset to match the *real* detected type, ignoring whatever extension
+    // the uploaded filename claimed, so a dangerous extension (e.g. .html)
+    // can never end up on disk even if the content happened to pass.
+    const audioExt = fileValidation.detectAudioExt(audioFile.path);
+    if (!audioExt) {
+      cleanup();
+      return res.status(400).json({ error: 'The uploaded audio file is not a recognized audio format.' });
+    }
+    enforceDetectedExtension(audioFile, audioExt);
+
+    for (const photo of photoFiles) {
+      const imageExt = fileValidation.detectImageExt(photo.path);
+      if (!imageExt) {
+        cleanup();
+        return res.status(400).json({ error: 'One of the uploaded photos is not a recognized image format.' });
+      }
+      enforceDetectedExtension(photo, imageExt);
+    }
 
     const dateStr = new Date().toISOString().slice(0, 10);
     const transcript = await ai.transcribeAudio(audioFile.path, audioFile.mimetype);

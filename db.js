@@ -1,5 +1,7 @@
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
+const auth = require('./auth');
 
 // DATA_DIR lets a hosting platform point storage at a persistent disk
 // (e.g. Render's mounted volume). Defaults to the app folder for local dev.
@@ -31,6 +33,18 @@ const PROJECT_COLOR_PALETTE = [
   '#0891b2', '#db2777', '#65a30d', '#ea580c', '#4f46e5'
 ];
 
+// Known initial passwords for the seeded demo users, used both when seeding a
+// brand-new data.json and when backfilling an older one that predates real
+// per-user login. Any OTHER existing user (invited for real, not part of this
+// list) gets a random temporary password instead — see backfillSchema below.
+const DEFAULT_USER_PASSWORDS = {
+  'admin@example.com': 'Admin2026!',
+  'priya@example.com': 'Priya2026!',
+  'sam@example.com': 'Sam2026!',
+  'jordan@example.com': 'Jordan2026!',
+  'casey@example.com': 'Casey2026!'
+};
+
 function seed() {
   return {
     nextIds: { user: 6, project: 3, task: 8, externalContact: 5, report: 1, rfi: 4 },
@@ -44,6 +58,13 @@ function seed() {
       { id: 3, name: 'Sam Okafor', email: 'sam@example.com', phone: '555-0103', role: 'Geotechnical', isAdmin: false },
       { id: 4, name: 'Jordan Lee', email: 'jordan@example.com', phone: '555-0104', role: 'Environmental', isAdmin: false },
       { id: 5, name: 'Casey Wu', email: 'casey@example.com', phone: '555-0105', role: 'Transportation', isAdmin: false }
+    ],
+    userCredentials: [
+      { userId: 1, passwordHash: auth.hashPassword(DEFAULT_USER_PASSWORDS['admin@example.com']) },
+      { userId: 2, passwordHash: auth.hashPassword(DEFAULT_USER_PASSWORDS['priya@example.com']) },
+      { userId: 3, passwordHash: auth.hashPassword(DEFAULT_USER_PASSWORDS['sam@example.com']) },
+      { userId: 4, passwordHash: auth.hashPassword(DEFAULT_USER_PASSWORDS['jordan@example.com']) },
+      { userId: 5, passwordHash: auth.hashPassword(DEFAULT_USER_PASSWORDS['casey@example.com']) }
     ],
     projects: [
       {
@@ -162,6 +183,28 @@ function backfillSchema(data) {
   if (!Array.isArray(data.externalContactCategories)) {
     data.externalContactCategories = DEFAULT_EXTERNAL_CONTACT_CATEGORIES.slice();
     changed = true;
+  }
+  if (!Array.isArray(data.userCredentials)) {
+    data.userCredentials = [];
+    changed = true;
+  }
+  // Any user saved before real per-user login existed won't have a credential
+  // record yet. Known demo users get their documented default password; any
+  // other (genuinely invited) user gets a random one-time password, logged to
+  // the server console so whoever runs this deploy can retrieve and share it.
+  if (Array.isArray(data.users)) {
+    data.users.forEach(u => {
+      if (data.userCredentials.some(c => c.userId === u.id)) return;
+      const knownPassword = u.email && DEFAULT_USER_PASSWORDS[u.email.toLowerCase()];
+      if (knownPassword) {
+        data.userCredentials.push({ userId: u.id, passwordHash: auth.hashPassword(knownPassword) });
+      } else {
+        const tempPassword = crypto.randomBytes(9).toString('base64url');
+        data.userCredentials.push({ userId: u.id, passwordHash: auth.hashPassword(tempPassword) });
+        console.log(`[auth migration] Generated a temporary password for ${u.email} (${u.name}): ${tempPassword} — share this with them securely; there's no self-service password change yet.`);
+      }
+      changed = true;
+    });
   }
   for (const [collectionKey, idKey] of Object.entries(COLLECTIONS)) {
     if (!Array.isArray(data[collectionKey])) {

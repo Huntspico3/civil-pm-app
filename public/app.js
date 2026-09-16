@@ -1,6 +1,6 @@
 const state = {
   gateToken: localStorage.getItem('civilpm_gate_token') || null,
-  currentUserId: localStorage.getItem('civilpm_user_id') ? Number(localStorage.getItem('civilpm_user_id')) : null,
+  sessionToken: localStorage.getItem('civilpm_session_token') || null,
   users: [],
   roles: [],
   stages: [],
@@ -25,7 +25,7 @@ function requireGate() {
 async function api(path, opts = {}) {
   const headers = Object.assign({ 'Content-Type': 'application/json' }, opts.headers || {});
   if (state.gateToken) headers['x-gate-token'] = state.gateToken;
-  if (state.currentUserId) headers['x-user-id'] = String(state.currentUserId);
+  if (state.sessionToken) headers['x-session-token'] = state.sessionToken;
   const res = await fetch('/api' + path, Object.assign({}, opts, { headers }));
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
@@ -38,7 +38,7 @@ async function api(path, opts = {}) {
 async function apiUpload(path, formData) {
   const headers = {};
   if (state.gateToken) headers['x-gate-token'] = state.gateToken;
-  if (state.currentUserId) headers['x-user-id'] = String(state.currentUserId);
+  if (state.sessionToken) headers['x-session-token'] = state.sessionToken;
   const res = await fetch('/api' + path, { method: 'POST', headers, body: formData });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
@@ -46,6 +46,20 @@ async function apiUpload(path, formData) {
     throw new Error(data.error || 'Request failed');
   }
   return data;
+}
+
+// Uploaded files under /uploads now require the same gate+session auth as the
+// API — but a plain <img src="..."> or <audio src="..."> can't attach custom
+// headers, so we fetch the file ourselves (with auth) and hand the browser a
+// local blob URL to display instead.
+async function authenticatedBlobUrl(url) {
+  const headers = {};
+  if (state.gateToken) headers['x-gate-token'] = state.gateToken;
+  if (state.sessionToken) headers['x-session-token'] = state.sessionToken;
+  const res = await fetch(url, { headers });
+  if (!res.ok) throw new Error('Could not load file');
+  const blob = await res.blob();
+  return URL.createObjectURL(blob);
 }
 
 function statusClass(status) {
@@ -103,12 +117,12 @@ async function boot() {
   state.stages = await api('/stages');
   state.taskStatuses = await api('/task-statuses');
   state.users = await api('/users');
-  if (state.currentUserId) {
+  if (state.sessionToken) {
     try {
       state.me = await api('/me');
     } catch (e) {
-      state.currentUserId = null;
-      localStorage.removeItem('civilpm_user_id');
+      state.sessionToken = null;
+      localStorage.removeItem('civilpm_session_token');
     }
   }
   if (state.me) await refreshMyOpenRfiCount();
@@ -166,19 +180,15 @@ function renderGateScreen(errorMessage) {
   });
 }
 
-function login(userId) {
-  state.currentUserId = userId;
-  state.myTasksUserId = null;
-  localStorage.setItem('civilpm_user_id', String(userId));
-  boot();
-}
-
-function logout() {
-  state.currentUserId = null;
+async function logout() {
+  if (state.sessionToken) {
+    try { await api('/logout', { method: 'POST' }); } catch (e) { /* best-effort */ }
+  }
+  state.sessionToken = null;
   state.me = null;
   state.myTasksUserId = null;
   state.myOpenRfiCount = 0;
-  localStorage.removeItem('civilpm_user_id');
+  localStorage.removeItem('civilpm_session_token');
   render();
 }
 
@@ -189,9 +199,8 @@ function setView(view, opts = {}) {
 }
 
 function render() {
-  if (!state.currentUserId || !state.me) {
-    root.innerHTML = renderLogin();
-    bindLogin();
+  if (!state.sessionToken || !state.me) {
+    renderLogin();
     return;
   }
   root.innerHTML = renderShell();
@@ -200,34 +209,39 @@ function render() {
 
 // ---------------- LOGIN ----------------
 
-function renderLogin() {
-  const items = state.users.map(u => `
-    <div class="user-pick" data-id="${u.id}">
-      <div class="info">
-        <strong>${escapeHtml(u.name)}</strong>
-        <span class="email">${escapeHtml(u.email)}</span>
-      </div>
-      <div>
-        ${u.isAdmin ? '<span class="badge admin">Admin</span> ' : ''}
-        <span class="badge role-${u.role}">${u.role}</span>
-      </div>
-    </div>
-  `).join('');
-
-  return `
+function renderLogin(errorMessage) {
+  root.innerHTML = `
     <div class="login-wrap">
       <div class="login-card">
         <h1>Civil <span style="color:#1e3a5f">PM</span></h1>
-        <p class="subtitle">Pick a team member to log in as (demo auth — no password for v1).</p>
-        ${items}
+        <p class="subtitle">Log in with your email and password.</p>
+        <form id="login-form">
+          <div><label>Email</label><input name="email" type="email" required autofocus autocomplete="username" /></div>
+          <div><label>Password</label><input name="password" type="password" required autocomplete="current-password" /></div>
+          <div id="login-error" class="error-text">${errorMessage ? escapeHtml(errorMessage) : ''}</div>
+          <button class="btn" type="submit">Log In</button>
+        </form>
       </div>
     </div>
   `;
-}
 
-function bindLogin() {
-  root.querySelectorAll('.user-pick').forEach(el => {
-    el.addEventListener('click', () => login(Number(el.dataset.id)));
+  root.querySelector('#login-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const form = e.target;
+    const errBox = form.querySelector('#login-error');
+    errBox.textContent = '';
+    try {
+      const data = await api('/login', {
+        method: 'POST',
+        body: JSON.stringify({ email: form.email.value, password: form.password.value })
+      });
+      state.sessionToken = data.token;
+      state.myTasksUserId = null;
+      localStorage.setItem('civilpm_session_token', data.token);
+      await boot();
+    } catch (err) {
+      errBox.textContent = err.message;
+    }
   });
 }
 
@@ -279,7 +293,7 @@ function renderShell() {
               ${state.me.isAdmin ? '<span class="badge admin">Admin</span>' : ''}
             </div>
           </div>
-          <button class="switch" id="switch-user">Switch user</button>
+          <button class="switch" id="switch-user">Log out</button>
         </div>
       </aside>
       <main id="main-content" class="main-content"><div class="main-content-inner"></div></main>
@@ -1185,13 +1199,14 @@ async function renderTeam(main) {
 
     <div class="card">
       <h2>Invite Team Member</h2>
-      <p class="hint">v1: this creates their account directly (no email is actually sent yet).</p>
+      <p class="hint">v1: this creates their account directly (no email is actually sent yet). Share the password with them yourself — there's no self-service password change yet.</p>
       <form id="invite-form">
         <div class="form-row">
           <div><label>Name</label><input name="name" required placeholder="Full name" /></div>
           <div><label>Email</label><input name="email" type="email" required placeholder="name@company.com" /></div>
           <div><label>Phone</label><input name="phone" type="tel" placeholder="555-0100" /></div>
           <div><label>Role</label><select name="role">${roleOptions}</select></div>
+          <div><label>Password</label><input name="password" type="password" required minlength="8" placeholder="At least 8 characters" /></div>
         </div>
         <div id="invite-form-error" class="error-text"></div>
         <button class="btn" type="submit">Send Invite</button>
@@ -1215,7 +1230,7 @@ async function renderTeam(main) {
     try {
       await api('/users', {
         method: 'POST',
-        body: JSON.stringify({ name: form.name.value, email: form.email.value, phone: form.phone.value, role: form.role.value })
+        body: JSON.stringify({ name: form.name.value, email: form.email.value, phone: form.phone.value, role: form.role.value, password: form.password.value })
       });
       state.users = await api('/users');
       renderTeam(main);
@@ -1942,7 +1957,7 @@ async function showReportModal(main, reportId, reviewable) {
 
   const photosHtml = report.photoUrls.length === 0
     ? '<p class="hint">No photos attached.</p>'
-    : `<div style="display:flex; flex-wrap:wrap; gap:0.5rem;">${report.photoUrls.map(url => `<img src="${url}" style="max-width:140px; max-height:140px; border-radius:6px; border:1px solid var(--border);" />`).join('')}</div>`;
+    : `<div style="display:flex; flex-wrap:wrap; gap:0.5rem;">${report.photoUrls.map(url => `<img data-photo-url="${escapeHtml(url)}" style="max-width:140px; max-height:140px; border-radius:6px; border:1px solid var(--border); background:var(--bg);" />`).join('')}</div>`;
 
   const bodyHtml = reviewable ? `
     <label>Draft Report (editable)</label>
@@ -1974,7 +1989,7 @@ async function showReportModal(main, reportId, reviewable) {
         <h3 style="margin-top:1rem;">Photos</h3>
         ${photosHtml}
         <h3 style="margin-top:1rem;">Voice Note</h3>
-        ${report.audioUrl ? `<audio controls src="${report.audioUrl}" style="width:100%;"></audio>` : '<p class="hint">No audio available.</p>'}
+        ${report.audioUrl ? `<audio controls data-audio-url="${escapeHtml(report.audioUrl)}" style="width:100%;"></audio>` : '<p class="hint">No audio available.</p>'}
         <div id="report-modal-error" class="error-text"></div>
         ${actionsHtml}
       </div>
@@ -1982,9 +1997,25 @@ async function showReportModal(main, reportId, reviewable) {
   `;
 
   const overlay = document.getElementById('report-modal-overlay');
-  const close = () => { modalRoot.innerHTML = ''; };
+  const createdBlobUrls = [];
+  const close = () => {
+    modalRoot.innerHTML = '';
+    createdBlobUrls.forEach(u => URL.revokeObjectURL(u));
+  };
   document.getElementById('report-modal-close').addEventListener('click', close);
   overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+
+  modalRoot.querySelectorAll('[data-photo-url]').forEach(img => {
+    authenticatedBlobUrl(img.dataset.photoUrl)
+      .then(blobUrl => { createdBlobUrls.push(blobUrl); img.src = blobUrl; })
+      .catch(() => { img.alt = 'Could not load photo'; });
+  });
+  const audioEl = modalRoot.querySelector('[data-audio-url]');
+  if (audioEl) {
+    authenticatedBlobUrl(audioEl.dataset.audioUrl)
+      .then(blobUrl => { createdBlobUrls.push(blobUrl); audioEl.src = blobUrl; })
+      .catch(() => { audioEl.replaceWith(document.createTextNode('Could not load audio.')); });
+  }
 
   if (reviewable) {
     const errBox = document.getElementById('report-modal-error');
