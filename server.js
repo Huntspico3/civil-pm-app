@@ -401,6 +401,13 @@ app.post('/api/projects/:id/tasks', requireAuth, (req, res) => {
   if (!project) return res.status(404).json({ error: 'Project not found' });
   if (!canSeeProject(req.user, project, data.tasks)) return res.status(403).json({ error: 'Not visible to you' });
 
+  // Only an admin or this project's manager can create tasks at all — a
+  // regular team member can still claim an unassigned existing task or
+  // update their own task's status/progress, just not create new ones.
+  if (!isThisProjectManager(req.user, project)) {
+    return res.status(403).json({ error: "Only an admin or this project's manager can create tasks" });
+  }
+
   const { title, description, requiredRole, assigneeId, dueDate } = req.body;
   if (!title || !requiredRole) return res.status(400).json({ error: 'title and requiredRole are required' });
   if (!data.roles.includes(requiredRole)) return res.status(400).json({ error: 'Invalid role' });
@@ -408,12 +415,7 @@ app.post('/api/projects/:id/tasks', requireAuth, (req, res) => {
     return res.status(400).json({ error: 'Due date must be in YYYY-MM-DD format' });
   }
 
-  const isManager = req.user.isAdmin || project.createdBy === req.user.id;
   const targetAssigneeId = assigneeId ? Number(assigneeId) : null;
-  if (!isManager && targetAssigneeId !== null && targetAssigneeId !== req.user.id) {
-    return res.status(403).json({ error: 'Only an admin or this project\'s manager can assign tasks to other team members — you can assign it to yourself instead.' });
-  }
-
   let assignee = null;
   if (targetAssigneeId !== null) {
     assignee = data.users.find(u => u.id === targetAssigneeId);

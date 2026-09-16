@@ -1025,6 +1025,7 @@ async function renderProjectDetail(main, projectId) {
       ${tasks.length > 0 ? paginationBarHtml(page, totalPages, total) : ''}
     </div>
 
+    ${isManager ? `
     <div class="card">
       <h2>New Task</h2>
       <form id="new-task-form">
@@ -1037,8 +1038,8 @@ async function renderProjectDetail(main, projectId) {
           </div>
           <div>
             <label>Assign to</label>
-            <select name="assigneeId" id="assignee-select">${assigneeOptionsForRole(state.roles[0], null, !isManager)}</select>
-            <div class="hint">${isManager ? 'Suggestions are matched to the required role above.' : 'You can only assign tasks to yourself — an admin or this project\'s manager can assign to others.'}</div>
+            <select name="assigneeId" id="assignee-select">${assigneeOptionsForRole(state.roles[0], null, false)}</select>
+            <div class="hint">Suggestions are matched to the required role above.</div>
           </div>
           <div>
             <label>Due date</label>
@@ -1049,6 +1050,7 @@ async function renderProjectDetail(main, projectId) {
         <button class="btn" type="submit">Create Task</button>
       </form>
     </div>
+    ` : ''}
 
     <div class="card">
       <h2>Field Reports</h2>
@@ -1089,9 +1091,11 @@ async function renderProjectDetail(main, projectId) {
 
   const roleSelect = main.querySelector('#required-role-select');
   const assigneeSelect = main.querySelector('#assignee-select');
-  roleSelect.addEventListener('change', () => {
-    assigneeSelect.innerHTML = assigneeOptionsForRole(roleSelect.value, null, !isManager);
-  });
+  if (roleSelect && assigneeSelect) {
+    roleSelect.addEventListener('change', () => {
+      assigneeSelect.innerHTML = assigneeOptionsForRole(roleSelect.value, null, false);
+    });
+  }
 
   main.querySelectorAll('[data-action="reassign"]').forEach(el => {
     el.addEventListener('click', (e) => e.stopPropagation());
@@ -1133,27 +1137,30 @@ async function renderProjectDetail(main, projectId) {
     });
   });
 
-  main.querySelector('#new-task-form').addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const form = e.target;
-    const errBox = form.querySelector('#task-form-error');
-    errBox.textContent = '';
-    try {
-      await api('/projects/' + projectId + '/tasks', {
-        method: 'POST',
-        body: JSON.stringify({
-          title: form.title.value,
-          description: form.description.value,
-          requiredRole: form.requiredRole.value,
-          assigneeId: form.assigneeId.value || null,
-          dueDate: form.dueDate.value || null
-        })
-      });
-      renderProjectDetail(main, projectId);
-    } catch (err) {
-      errBox.textContent = err.message;
-    }
-  });
+  const newTaskForm = main.querySelector('#new-task-form');
+  if (newTaskForm) {
+    newTaskForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const form = e.target;
+      const errBox = form.querySelector('#task-form-error');
+      errBox.textContent = '';
+      try {
+        await api('/projects/' + projectId + '/tasks', {
+          method: 'POST',
+          body: JSON.stringify({
+            title: form.title.value,
+            description: form.description.value,
+            requiredRole: form.requiredRole.value,
+            assigneeId: form.assigneeId.value || null,
+            dueDate: form.dueDate.value || null
+          })
+        });
+        renderProjectDetail(main, projectId);
+      } catch (err) {
+        errBox.textContent = err.message;
+      }
+    });
+  }
 }
 
 // ---------------- IMPORT TASKS (CSV / Excel) ----------------
