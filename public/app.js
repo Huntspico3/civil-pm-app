@@ -6,7 +6,7 @@ const state = {
   stages: [],
   taskStatuses: [],
   externalContactCategories: [],
-  view: 'dashboard', // 'dashboard' | 'projects' | 'project' | 'project-board' | 'project-rfis' | 'project-documents' | 'contacts' | 'team' | 'settings' | 'portfolio' | 'my-tasks' | 'offsite-reports'
+  view: 'dashboard', // 'dashboard' | 'projects' | 'project' | 'project-board' | 'project-rfis' | 'project-documents' | 'project-snags' | 'contacts' | 'team' | 'settings' | 'portfolio' | 'my-tasks' | 'offsite-reports'
   activeProjectId: null,
   dashboardGroupBy: 'project',
   myTasksUserId: null,
@@ -510,7 +510,7 @@ function renderShell() {
   if (state.me.isAdmin) nav.push({ key: 'settings', label: 'Settings' });
 
   const navHtml = nav.map(n => `
-    <button data-nav="${n.key}" class="${state.view === n.key || (n.key === 'projects' && ['project', 'project-board', 'project-rfis', 'project-documents'].includes(state.view)) ? 'active' : ''}">
+    <button data-nav="${n.key}" class="${state.view === n.key || (n.key === 'projects' && ['project', 'project-board', 'project-rfis', 'project-documents', 'project-snags'].includes(state.view)) ? 'active' : ''}">
       ${NAV_ICONS[n.key] || ''}
       <span class="nav-label">${n.label}</span>
       ${n.key === 'my-tasks' && state.myOpenRfiCount > 0 ? `<span class="nav-badge" title="Open RFIs waiting on you">${state.myOpenRfiCount}</span>` : ''}
@@ -551,6 +551,7 @@ function bindShell() {
   else if (state.view === 'project-board') renderProjectBoard(main, state.activeProjectId);
   else if (state.view === 'project-rfis') renderProjectRfis(main, state.activeProjectId);
   else if (state.view === 'project-documents') renderProjectDocuments(main, state.activeProjectId);
+  else if (state.view === 'project-snags') renderProjectSnags(main, state.activeProjectId);
   else if (state.view === 'contacts') renderContacts(main);
   else if (state.view === 'external-contacts') renderExternalContacts(main);
   else if (state.view === 'team') renderTeam(main);
@@ -923,7 +924,8 @@ function projectTabsHtml(active) {
     { key: 'project', label: 'List View' },
     { key: 'project-board', label: 'Board View' },
     { key: 'project-rfis', label: 'RFIs' },
-    { key: 'project-documents', label: 'Documents' }
+    { key: 'project-documents', label: 'Documents' },
+    { key: 'project-snags', label: 'Snags' }
   ];
   return `<div class="dash-toggle">${tabs.map(t => `
     <button class="btn ${t.key === active ? '' : 'secondary'}" data-project-tab="${t.key}">${t.label}</button>
@@ -1812,6 +1814,328 @@ async function showDocumentHistoryModal(main, docId) {
   bindDocumentDownloadLinks(modalRoot);
 }
 
+// ---------------- PROJECT SNAGS / DEFECTS ----------------
+// Small, fixed list — unlike task statuses/roles/stages, this isn't
+// admin-editable, matching how RFI status ("Open"/"Answered") works too.
+const SNAG_STATUSES = ['Open', 'In Progress', 'Resolved'];
+
+async function renderProjectSnags(main, projectId) {
+  main.innerHTML = `<p class="subtitle">Loading…</p>`;
+  let project, snags;
+  try {
+    project = await api('/projects/' + projectId);
+    snags = await api('/projects/' + projectId + '/snags');
+  } catch (e) {
+    main.innerHTML = `<button class="back-link" id="back-to-projects">&larr; Back to Projects</button><p class="error-text">${escapeHtml(e.message)}</p>`;
+    main.querySelector('#back-to-projects').addEventListener('click', () => setView('projects'));
+    return;
+  }
+
+  const isManager = state.me.isAdmin || project.createdBy === state.me.id;
+
+  const cardsHtml = snags.length === 0
+    ? emptyStateHtml('No snags logged yet.')
+    : `<div class="grid">${snags.map(s => `
+        <div class="card snag-card" data-open-snag="${s.id}">
+          <div class="snag-pin-wrap snag-thumb-wrap">
+            <img data-photo-url="${escapeHtml(s.photoUrl)}" class="snag-thumb" alt="" />
+            ${s.pinX != null ? `<div class="snag-pin" style="left:${s.pinX}%; top:${s.pinY}%;"></div>` : ''}
+          </div>
+          <p class="snag-card-desc">${escapeHtml(s.description)}</p>
+          <div class="meta">
+            <span class="status ${escapeHtml(statusClass(s.status))}">${escapeHtml(s.status)}</span>
+            <span>${s.assignee ? escapeHtml(s.assignee.name) : 'Unassigned'}</span>
+          </div>
+        </div>
+      `).join('')}</div>`;
+
+  main.innerHTML = `
+    <button class="back-link" id="back-to-projects">&larr; Back to Projects</button>
+    <h1>${escapeHtml(project.name)}</h1>
+    <p class="subtitle">Snags / defects logged for this project. Click one to see its photo, pinned location, and status history.</p>
+    ${projectTabsHtml('project-snags')}
+    <div class="section-header">
+      <div></div>
+      <button class="btn" id="log-snag-btn">Log a Snag</button>
+    </div>
+    ${cardsHtml}
+    <div id="snag-modal-root"></div>
+  `;
+
+  main.querySelector('#back-to-projects').addEventListener('click', () => setView('projects'));
+  bindProjectTabs(main, projectId);
+
+  main.querySelectorAll('[data-photo-url]').forEach(img => {
+    authenticatedBlobUrl(img.dataset.photoUrl)
+      .then(blobUrl => { img.src = blobUrl; })
+      .catch(() => { img.alt = 'Could not load photo'; });
+  });
+
+  main.querySelectorAll('[data-open-snag]').forEach(card => {
+    card.addEventListener('click', () => {
+      const snag = snags.find(s => s.id === Number(card.dataset.openSnag));
+      if (snag) showSnagDetailModal(main, projectId, snag, isManager, () => renderProjectSnags(main, projectId));
+    });
+  });
+
+  main.querySelector('#log-snag-btn').addEventListener('click', () => {
+    showSnagFormModal(main, projectId, { mode: 'upload' }, () => renderProjectSnags(main, projectId));
+  });
+
+  // A "Log as Snag" click from a Site Visit Report (see showReportModal)
+  // navigates here and leaves a one-shot prefill on state for this render to
+  // pick up and open immediately — setView() itself has no way to carry
+  // extra options through to an async view render.
+  if (state.pendingSnagFromReport) {
+    const prefill = state.pendingSnagFromReport;
+    state.pendingSnagFromReport = null;
+    showSnagFormModal(main, projectId, prefill, () => renderProjectSnags(main, projectId));
+  }
+}
+
+// Wires click-to-place-a-pin on `imgEl` (already positioned inside a
+// .snag-pin-wrap), showing/moving `markerEl` and reporting the new
+// percentage position via `onPlaced(x, y)`. Shared by the "upload a new
+// photo" and "reuse a report's photo" creation flows, and by nothing else —
+// an existing snag's pin is read-only, just an absolutely-positioned marker.
+function bindSnagPinPlacement(imgEl, markerEl, statusEl, onPlaced) {
+  imgEl.addEventListener('click', (e) => {
+    const rect = imgEl.getBoundingClientRect();
+    const x = Math.max(0, Math.min(100, ((e.clientX - rect.left) / rect.width) * 100));
+    const y = Math.max(0, Math.min(100, ((e.clientY - rect.top) / rect.height) * 100));
+    markerEl.style.left = x + '%';
+    markerEl.style.top = y + '%';
+    markerEl.hidden = false;
+    if (statusEl) statusEl.textContent = 'Pin placed — click the photo again to move it.';
+    onPlaced(x, y);
+  });
+}
+
+// opts:
+//   { mode: 'upload' }
+//   { mode: 'from-report', reportId, photoFileName, photoUrl, prefillDescription }
+async function showSnagFormModal(main, projectId, opts, onCreated) {
+  const modalRoot = main.querySelector('#snag-modal-root');
+  if (!modalRoot) return;
+
+  let pin = { x: null, y: null };
+
+  modalRoot.innerHTML = `
+    <div class="modal-overlay" id="snag-modal-overlay">
+      <div class="modal-card modal-card-wide">
+        <button class="modal-close" id="snag-modal-close">&times;</button>
+        <h2>Log a Snag</h2>
+        <form id="snag-form">
+          <div class="form-row">
+            <div>
+              <label>Status</label>
+              <select name="status">${SNAG_STATUSES.map(s => `<option value="${s}">${s}</option>`).join('')}</select>
+            </div>
+            <div>
+              <label>Assign to</label>
+              <select name="assigneeId">
+                <option value="">— Unassigned —</option>
+                ${state.users.map(u => `<option value="${u.id}">${escapeHtml(u.name)}</option>`).join('')}
+              </select>
+            </div>
+          </div>
+          <div>
+            <label>Description</label>
+            <textarea name="description" required placeholder="Short description of the issue">${escapeHtml(opts.prefillDescription || '')}</textarea>
+          </div>
+          ${opts.mode === 'upload' ? `<div><label>Photo</label><input type="file" name="photo" accept="image/*" required /></div>` : ''}
+          <div>
+            <label>Pin the issue's location on the photo (optional — click the photo)</label>
+            <div id="snag-photo-picker">
+              <p class="hint">${opts.mode === 'upload' ? 'Choose a photo above first.' : 'Loading photo…'}</p>
+            </div>
+          </div>
+          <div id="snag-form-error" class="error-text"></div>
+          <button class="btn" type="submit">Create Snag</button>
+        </form>
+      </div>
+    </div>
+  `;
+
+  const overlay = document.getElementById('snag-modal-overlay');
+  const close = () => { modalRoot.innerHTML = ''; };
+  document.getElementById('snag-modal-close').addEventListener('click', close);
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+
+  const picker = document.getElementById('snag-photo-picker');
+  function renderPicker(src) {
+    picker.innerHTML = `
+      <div class="snag-pin-wrap">
+        <img src="${src}" id="snag-pin-img" />
+        <div class="snag-pin" id="snag-pin-marker" hidden></div>
+      </div>
+      <p class="hint" id="snag-pin-status">Click the photo to place a pin (optional).</p>
+    `;
+    bindSnagPinPlacement(
+      document.getElementById('snag-pin-img'),
+      document.getElementById('snag-pin-marker'),
+      document.getElementById('snag-pin-status'),
+      (x, y) => { pin = { x, y }; }
+    );
+  }
+
+  if (opts.mode === 'from-report') {
+    try {
+      const blobUrl = await authenticatedBlobUrl(opts.photoUrl);
+      renderPicker(blobUrl);
+    } catch (err) {
+      picker.innerHTML = `<p class="error-text">Could not load the photo from that report.</p>`;
+    }
+  } else {
+    modalRoot.querySelector('input[name="photo"]').addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      pin = { x: null, y: null };
+      renderPicker(URL.createObjectURL(file));
+    });
+  }
+
+  modalRoot.querySelector('#snag-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const form = e.target;
+    const errBox = document.getElementById('snag-form-error');
+    errBox.textContent = '';
+    const submitBtn = form.querySelector('button[type="submit"]');
+
+    try {
+      if (opts.mode === 'from-report') {
+        await api('/projects/' + projectId + '/snags/from-report', {
+          method: 'POST',
+          body: JSON.stringify({
+            reportId: opts.reportId,
+            photoFileName: opts.photoFileName,
+            description: form.description.value,
+            status: form.status.value,
+            assigneeId: form.assigneeId.value || null,
+            pinX: pin.x,
+            pinY: pin.y
+          })
+        });
+      } else {
+        const fileInput = form.querySelector('input[name="photo"]');
+        if (!fileInput.files[0]) {
+          errBox.textContent = 'Please choose a photo.';
+          return;
+        }
+        submitBtn.disabled = true;
+        const formData = new FormData();
+        formData.append('photos', fileInput.files[0]); // shared 'upload' multer instance's image-checked field name
+        formData.append('description', form.description.value);
+        formData.append('status', form.status.value);
+        if (form.assigneeId.value) formData.append('assigneeId', form.assigneeId.value);
+        if (pin.x != null) {
+          formData.append('pinX', pin.x);
+          formData.append('pinY', pin.y);
+        }
+        await apiUpload('/projects/' + projectId + '/snags', formData);
+      }
+      close();
+      if (onCreated) onCreated();
+    } catch (err) {
+      submitBtn.disabled = false;
+      errBox.textContent = err.message;
+    }
+  });
+}
+
+async function showSnagDetailModal(main, projectId, snag, isManager, onUpdated) {
+  const modalRoot = main.querySelector('#snag-modal-root');
+  if (!modalRoot) return;
+
+  const canEditStatus = isManager || snag.assigneeId === state.me.id;
+
+  modalRoot.innerHTML = `
+    <div class="modal-overlay" id="snag-detail-overlay">
+      <div class="modal-card modal-card-wide">
+        <button class="modal-close" id="snag-detail-close">&times;</button>
+        <h2>Snag</h2>
+        <div id="snag-detail-photo-wrap"><p class="hint">Loading photo…</p></div>
+        <p class="subtitle">${escapeHtml(snag.description)}</p>
+        <div class="form-row">
+          <div>
+            <label>Status</label>
+            ${canEditStatus
+              ? `<select class="select-inline" id="snag-detail-status">${SNAG_STATUSES.map(s => `<option value="${s}" ${s === snag.status ? 'selected' : ''}>${s}</option>`).join('')}</select>`
+              : `<div><span class="status ${escapeHtml(statusClass(snag.status))}">${escapeHtml(snag.status)}</span></div>`}
+          </div>
+          <div>
+            <label>Assigned to</label>
+            ${isManager
+              ? `<select class="select-inline" id="snag-detail-assignee">
+                  <option value="">— Unassigned —</option>
+                  ${state.users.map(u => `<option value="${u.id}" ${snag.assigneeId === u.id ? 'selected' : ''}>${escapeHtml(u.name)}</option>`).join('')}
+                </select>`
+              : `<div>${snag.assignee ? escapeHtml(snag.assignee.name) : 'Unassigned'}</div>`}
+          </div>
+        </div>
+        <p class="hint">Logged by ${snag.createdByUser ? escapeHtml(snag.createdByUser.name) : 'Unknown'} on ${formatDate(snag.createdAt.slice(0, 10))}</p>
+        <div id="snag-detail-error" class="error-text"></div>
+
+        <h3>Status History</h3>
+        <ul class="modal-team-list">
+          ${snag.statusHistory.slice().reverse().map(h => `
+            <li>
+              <span class="status ${escapeHtml(statusClass(h.status))}">${escapeHtml(h.status)}</span>
+              <span class="hint">${h.changedByUser ? escapeHtml(h.changedByUser.name) : 'Unknown'} &middot; ${formatDate(h.changedAt.slice(0, 10))}</span>
+            </li>
+          `).join('')}
+        </ul>
+      </div>
+    </div>
+  `;
+
+  const overlay = document.getElementById('snag-detail-overlay');
+  const close = () => { modalRoot.innerHTML = ''; };
+  document.getElementById('snag-detail-close').addEventListener('click', close);
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+
+  const photoWrap = document.getElementById('snag-detail-photo-wrap');
+  authenticatedBlobUrl(snag.photoUrl)
+    .then(blobUrl => {
+      photoWrap.innerHTML = `
+        <div class="snag-pin-wrap">
+          <img src="${blobUrl}" />
+          ${snag.pinX != null ? `<div class="snag-pin" style="left:${snag.pinX}%; top:${snag.pinY}%;"></div>` : ''}
+        </div>
+      `;
+    })
+    .catch(() => { photoWrap.innerHTML = '<p class="error-text">Could not load the photo.</p>'; });
+
+  const refresh = () => { close(); if (onUpdated) onUpdated(); };
+  const errBox = document.getElementById('snag-detail-error');
+
+  const statusSelect = document.getElementById('snag-detail-status');
+  if (statusSelect) {
+    statusSelect.addEventListener('change', async () => {
+      try {
+        await api('/snags/' + snag.id, { method: 'PATCH', body: JSON.stringify({ status: statusSelect.value }) });
+        refresh();
+      } catch (err) {
+        errBox.textContent = err.message;
+      }
+    });
+  }
+  const assigneeSelect = document.getElementById('snag-detail-assignee');
+  if (assigneeSelect) {
+    assigneeSelect.addEventListener('change', async () => {
+      try {
+        await api('/snags/' + snag.id, {
+          method: 'PATCH',
+          body: JSON.stringify({ assigneeId: assigneeSelect.value ? Number(assigneeSelect.value) : null })
+        });
+        refresh();
+      } catch (err) {
+        errBox.textContent = err.message;
+      }
+    });
+  }
+}
+
 // ---------------- TEAM (admin) ----------------
 
 async function renderTeam(main) {
@@ -2600,7 +2924,12 @@ async function showReportModal(main, reportId, reviewable) {
 
   const photosHtml = report.photoUrls.length === 0
     ? '<p class="hint">No photos attached.</p>'
-    : `<div style="display:flex; flex-wrap:wrap; gap:0.5rem;">${report.photoUrls.map(url => `<img data-photo-url="${escapeHtml(url)}" style="max-width:140px; max-height:140px; border-radius:6px; border:1px solid var(--border); background:var(--bg);" />`).join('')}</div>`;
+    : `<div style="display:flex; flex-wrap:wrap; gap:0.75rem;">${report.photoUrls.map(url => `
+        <div style="width:140px;">
+          <img data-photo-url="${escapeHtml(url)}" style="width:140px; height:140px; object-fit:cover; border-radius:6px; border:1px solid var(--border); background:var(--bg); display:block;" />
+          <button type="button" class="btn small secondary" data-log-snag="${escapeHtml(url)}" style="width:100%; margin-top:0.35rem;">Log as Snag</button>
+        </div>
+      `).join('')}</div>`;
 
   const bodyHtml = reviewable ? `
     <label>Draft Report (editable)</label>
@@ -2652,6 +2981,20 @@ async function showReportModal(main, reportId, reviewable) {
     authenticatedBlobUrl(img.dataset.photoUrl)
       .then(blobUrl => { createdBlobUrls.push(blobUrl); img.src = blobUrl; })
       .catch(() => { img.alt = 'Could not load photo'; });
+  });
+  modalRoot.querySelectorAll('[data-log-snag]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const photoUrl = btn.dataset.logSnag;
+      state.pendingSnagFromReport = {
+        mode: 'from-report',
+        reportId: report.id,
+        photoFileName: photoUrl.replace(/^\/uploads\//, ''),
+        photoUrl,
+        prefillDescription: report.draftText || ''
+      };
+      close();
+      setView('project-snags', { projectId: report.projectId });
+    });
   });
   const audioEl = modalRoot.querySelector('[data-audio-url]');
   if (audioEl) {

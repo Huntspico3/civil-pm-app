@@ -265,6 +265,7 @@ h3 { font-size: 0.95rem; font-weight: 700; margin: 0 0 0.6rem; }
 .status.status-Open { color: var(--warning); border-color: var(--warning-border); background: var(--warning-bg); }
 .status.status-Review { color: var(--accent-teal); border-color: #99f6e4; background: #f0fdfa; }
 .status.status-To-Do { color: var(--text-muted); border-color: var(--border); background: var(--bg); }
+.status.status-Resolved { color: var(--success); border-color: var(--success-border); background: var(--success-bg); }
 
 /* ============ FORMS ============ */
 
@@ -718,6 +719,34 @@ body.gantt-dragging { user-select: none; }
 
 .summary-text p { margin: 0 0 0.75rem; line-height: 1.6; }
 .summary-text p:last-child { margin-bottom: 0; }
+
+/* ============ SNAGS / DEFECTS ============ */
+
+.snag-card { cursor: pointer; }
+.snag-card-desc { font-size: 0.88rem; margin: 0.7rem 0 0.5rem; }
+
+/* A relatively-positioned photo box that a .snag-pin can be placed inside
+   at an absolute (left/top) percentage — used identically for the small
+   card thumbnail, the read-only detail view, and the click-to-place preview
+   in the creation form. */
+.snag-pin-wrap { position: relative; border-radius: var(--radius-sm); overflow: hidden; background: var(--bg); border: 1px solid var(--border); }
+.snag-pin-wrap img { display: block; width: 100%; max-height: 420px; object-fit: contain; background: var(--bg); cursor: crosshair; }
+.snag-thumb-wrap img.snag-thumb { max-height: 160px; object-fit: cover; cursor: default; }
+
+.snag-pin {
+  position: absolute;
+  width: 20px;
+  height: 20px;
+  margin-left: -10px;
+  margin-top: -10px;
+  border-radius: 50% 50% 50% 0;
+  background: var(--danger);
+  border: 2px solid white;
+  box-shadow: var(--shadow-md);
+  transform: rotate(-45deg);
+  pointer-events: none;
+}
+.snag-thumb-wrap .snag-pin { width: 14px; height: 14px; margin-left: -7px; margin-top: -7px; }
 
 /* ============ RFIs ============ */
 

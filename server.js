@@ -1155,6 +1155,217 @@ app.get('/api/documents/:id/versions', requireAuth, (req, res) => {
   res.json({ docNumber: doc.docNumber, versions });
 });
 
+// --- snags / defects (per project — a pinned photo location + status history) ---
+// Any team member who can see the project can log one (same as RFIs — this
+// is "I noticed a problem," not privileged work like creating tasks or
+// documents). Updating status is open to the assignee or this project's
+// manager; reassigning it to someone else is manager-only, same rule used
+// everywhere else in the app.
+const SNAG_STATUSES = ['Open', 'In Progress', 'Resolved'];
+
+function enrichSnag(snag, data) {
+  return {
+    ...snag,
+    photoUrl: '/uploads/' + snag.photoFile,
+    assignee: data.users.find(u => u.id === snag.assigneeId) || null,
+    createdByUser: data.users.find(u => u.id === snag.createdBy) || null,
+    statusHistory: snag.statusHistory.map(h => ({
+      ...h,
+      changedByUser: data.users.find(u => u.id === h.changedBy) || null
+    }))
+  };
+}
+
+// Pin position is stored as a percentage (0-100) of the photo's width/height,
+// not raw pixels, so it still lands in the right spot however large the
+// photo is rendered later. Omitting both is fine (no marker placed yet).
+function validatePin(pinX, pinY) {
+  const noPin = (v) => v === undefined || v === null || v === '';
+  if (noPin(pinX) && noPin(pinY)) return { pinX: null, pinY: null, error: null };
+  const x = Number(pinX);
+  const y = Number(pinY);
+  if (Number.isNaN(x) || Number.isNaN(y) || x < 0 || x > 100 || y < 0 || y > 100) {
+    return { pinX: null, pinY: null, error: 'Pin position must be within the photo (0-100%)' };
+  }
+  return { pinX: x, pinY: y, error: null };
+}
+
+app.get('/api/projects/:id/snags', requireAuth, (req, res) => {
+  const data = db.load();
+  const project = data.projects.find(p => p.id === Number(req.params.id));
+  if (!project) return res.status(404).json({ error: 'Project not found' });
+  if (!canSeeProject(req.user, project, data.tasks)) return res.status(403).json({ error: 'Not visible to you' });
+
+  const snags = data.snags
+    .filter(s => s.projectId === project.id)
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+    .map(s => enrichSnag(s, data));
+
+  res.json(snags);
+});
+
+// Reuses the shared `upload` instance's 'photos' field (its fileFilter
+// already requires an image mimetype for that field name) rather than a new
+// multer instance just to accept one photo under a different field name.
+app.post('/api/projects/:id/snags', requireAuth, upload.single('photos'), (req, res) => {
+  const cleanup = () => { if (req.file) fs.unlink(req.file.path, () => {}); };
+  try {
+    const data = db.load();
+    const project = data.projects.find(p => p.id === Number(req.params.id));
+    if (!project) {
+      cleanup();
+      return res.status(404).json({ error: 'Project not found' });
+    }
+    if (!canSeeProject(req.user, project, data.tasks)) {
+      cleanup();
+      return res.status(403).json({ error: 'Not visible to you' });
+    }
+    if (!req.file) return res.status(400).json({ error: 'A photo is required' });
+
+    const description = (req.body.description || '').trim();
+    if (!description) {
+      cleanup();
+      return res.status(400).json({ error: 'A short description is required' });
+    }
+
+    const status = req.body.status || SNAG_STATUSES[0];
+    if (!SNAG_STATUSES.includes(status)) {
+      cleanup();
+      return res.status(400).json({ error: 'Invalid status' });
+    }
+
+    let assignee = null;
+    if (req.body.assigneeId) {
+      assignee = data.users.find(u => u.id === Number(req.body.assigneeId));
+      if (!assignee) {
+        cleanup();
+        return res.status(400).json({ error: 'Assignee not found' });
+      }
+    }
+
+    const { pinX, pinY, error: pinError } = validatePin(req.body.pinX, req.body.pinY);
+    if (pinError) {
+      cleanup();
+      return res.status(400).json({ error: pinError });
+    }
+
+    // Same don't-trust-the-claimed-type check used for every other photo
+    // upload in this app.
+    const imageExt = fileValidation.detectImageExt(req.file.path);
+    if (!imageExt) {
+      cleanup();
+      return res.status(400).json({ error: 'The uploaded photo is not a recognized image format.' });
+    }
+    enforceDetectedExtension(req.file, imageExt);
+
+    const now = new Date().toISOString();
+    const snag = {
+      id: db.nextId('snag'),
+      projectId: project.id,
+      description,
+      photoFile: req.file.filename,
+      pinX,
+      pinY,
+      status,
+      assigneeId: assignee ? assignee.id : null,
+      createdBy: req.user.id,
+      createdAt: now,
+      sourceReportId: null,
+      statusHistory: [{ status, changedBy: req.user.id, changedAt: now }]
+    };
+    data.snags.push(snag);
+    db.save(data);
+    res.status(201).json(enrichSnag(snag, data));
+  } catch (err) {
+    cleanup();
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Logging a snag straight from a Site Visit Report's own photo, with no
+// re-upload — the photo file already exists on disk from the report, so
+// this just points a new snag at that same file (after checking it really
+// does belong to the report named).
+app.post('/api/projects/:id/snags/from-report', requireAuth, (req, res) => {
+  const data = db.load();
+  const project = data.projects.find(p => p.id === Number(req.params.id));
+  if (!project) return res.status(404).json({ error: 'Project not found' });
+  if (!canSeeProject(req.user, project, data.tasks)) return res.status(403).json({ error: 'Not visible to you' });
+
+  const { reportId, photoFileName, description, status, assigneeId, pinX: rawPinX, pinY: rawPinY } = req.body;
+  const report = data.reports.find(r => r.id === Number(reportId) && r.projectId === project.id);
+  if (!report) return res.status(400).json({ error: 'Report not found' });
+  if (!report.photos.includes(photoFileName)) {
+    return res.status(400).json({ error: "That photo doesn't belong to the given report" });
+  }
+
+  const trimmedDescription = (description || '').trim();
+  if (!trimmedDescription) return res.status(400).json({ error: 'A short description is required' });
+
+  const finalStatus = status || SNAG_STATUSES[0];
+  if (!SNAG_STATUSES.includes(finalStatus)) return res.status(400).json({ error: 'Invalid status' });
+
+  let assignee = null;
+  if (assigneeId) {
+    assignee = data.users.find(u => u.id === Number(assigneeId));
+    if (!assignee) return res.status(400).json({ error: 'Assignee not found' });
+  }
+
+  const { pinX, pinY, error: pinError } = validatePin(rawPinX, rawPinY);
+  if (pinError) return res.status(400).json({ error: pinError });
+
+  const now = new Date().toISOString();
+  const snag = {
+    id: db.nextId('snag'),
+    projectId: project.id,
+    description: trimmedDescription,
+    photoFile: photoFileName,
+    pinX,
+    pinY,
+    status: finalStatus,
+    assigneeId: assignee ? assignee.id : null,
+    createdBy: req.user.id,
+    createdAt: now,
+    sourceReportId: report.id,
+    statusHistory: [{ status: finalStatus, changedBy: req.user.id, changedAt: now }]
+  };
+  data.snags.push(snag);
+  db.save(data);
+  res.status(201).json(enrichSnag(snag, data));
+});
+
+app.patch('/api/snags/:id', requireAuth, (req, res) => {
+  const data = db.load();
+  const snag = data.snags.find(s => s.id === Number(req.params.id));
+  if (!snag) return res.status(404).json({ error: 'Snag not found' });
+  const project = data.projects.find(p => p.id === snag.projectId);
+  const isManager = req.user.isAdmin || (project && project.createdBy === req.user.id);
+  const isAssignee = snag.assigneeId === req.user.id;
+  if (!isManager && !isAssignee) return res.status(403).json({ error: 'Not permitted to edit this snag' });
+
+  const { status, assigneeId } = req.body;
+  if (status !== undefined) {
+    if (!SNAG_STATUSES.includes(status)) return res.status(400).json({ error: 'Invalid status' });
+    if (status !== snag.status) {
+      snag.status = status;
+      snag.statusHistory.push({ status, changedBy: req.user.id, changedAt: new Date().toISOString() });
+    }
+  }
+  if (assigneeId !== undefined) {
+    if (!isManager) return res.status(403).json({ error: "Only an admin or this project's manager can reassign a snag" });
+    if (assigneeId === null || assigneeId === '') {
+      snag.assigneeId = null;
+    } else {
+      const assignee = data.users.find(u => u.id === Number(assigneeId));
+      if (!assignee) return res.status(400).json({ error: 'Assignee not found' });
+      snag.assigneeId = assignee.id;
+    }
+  }
+
+  db.save(data);
+  res.json(enrichSnag(snag, data));
+});
+
 // --- portfolio timeline (org-wide, visible to every logged-in user) ---
 app.get('/api/portfolio', requireAuth, (req, res) => {
   const data = db.load();
