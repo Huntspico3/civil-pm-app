@@ -47,7 +47,7 @@ const DEFAULT_USER_PASSWORDS = {
 
 function seed() {
   return {
-    nextIds: { user: 6, project: 3, task: 8, externalContact: 5, report: 1, rfi: 4 },
+    nextIds: { user: 6, project: 3, task: 8, externalContact: 5, report: 1, rfi: 4, document: 1 },
     roles: DEFAULT_ROLES.slice(),
     stages: DEFAULT_STAGES.slice(),
     taskStatuses: DEFAULT_TASK_STATUSES.slice(),
@@ -144,7 +144,8 @@ function seed() {
         createdAt: '2026-07-10T09:00:00.000Z',
         answeredAt: '2026-07-18T14:30:00.000Z'
       }
-    ]
+    ],
+    documents: []
   };
 }
 
@@ -161,7 +162,8 @@ const COLLECTIONS = {
   tasks: 'task',
   externalContacts: 'externalContact',
   reports: 'report',
-  rfis: 'rfi'
+  rfis: 'rfi',
+  documents: 'document'
 };
 
 function backfillSchema(data) {

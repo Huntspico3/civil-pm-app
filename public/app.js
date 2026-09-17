@@ -6,7 +6,7 @@ const state = {
   stages: [],
   taskStatuses: [],
   externalContactCategories: [],
-  view: 'dashboard', // 'dashboard' | 'projects' | 'project' | 'project-board' | 'project-rfis' | 'contacts' | 'team' | 'settings' | 'portfolio' | 'my-tasks' | 'offsite-reports'
+  view: 'dashboard', // 'dashboard' | 'projects' | 'project' | 'project-board' | 'project-rfis' | 'project-documents' | 'contacts' | 'team' | 'settings' | 'portfolio' | 'my-tasks' | 'offsite-reports'
   activeProjectId: null,
   dashboardGroupBy: 'project',
   myTasksUserId: null,
@@ -510,7 +510,7 @@ function renderShell() {
   if (state.me.isAdmin) nav.push({ key: 'settings', label: 'Settings' });
 
   const navHtml = nav.map(n => `
-    <button data-nav="${n.key}" class="${state.view === n.key || (n.key === 'projects' && ['project', 'project-board', 'project-rfis'].includes(state.view)) ? 'active' : ''}">
+    <button data-nav="${n.key}" class="${state.view === n.key || (n.key === 'projects' && ['project', 'project-board', 'project-rfis', 'project-documents'].includes(state.view)) ? 'active' : ''}">
       ${NAV_ICONS[n.key] || ''}
       <span class="nav-label">${n.label}</span>
       ${n.key === 'my-tasks' && state.myOpenRfiCount > 0 ? `<span class="nav-badge" title="Open RFIs waiting on you">${state.myOpenRfiCount}</span>` : ''}
@@ -550,6 +550,7 @@ function bindShell() {
   else if (state.view === 'project') renderProjectDetail(main, state.activeProjectId);
   else if (state.view === 'project-board') renderProjectBoard(main, state.activeProjectId);
   else if (state.view === 'project-rfis') renderProjectRfis(main, state.activeProjectId);
+  else if (state.view === 'project-documents') renderProjectDocuments(main, state.activeProjectId);
   else if (state.view === 'contacts') renderContacts(main);
   else if (state.view === 'external-contacts') renderExternalContacts(main);
   else if (state.view === 'team') renderTeam(main);
@@ -921,7 +922,8 @@ function projectTabsHtml(active) {
   const tabs = [
     { key: 'project', label: 'List View' },
     { key: 'project-board', label: 'Board View' },
-    { key: 'project-rfis', label: 'RFIs' }
+    { key: 'project-rfis', label: 'RFIs' },
+    { key: 'project-documents', label: 'Documents' }
   ];
   return `<div class="dash-toggle">${tabs.map(t => `
     <button class="btn ${t.key === active ? '' : 'secondary'}" data-project-tab="${t.key}">${t.label}</button>
@@ -1625,6 +1627,189 @@ async function renderProjectRfis(main, projectId) {
       }
     });
   });
+}
+
+// ---------------- PROJECT DOCUMENTS (register) ----------------
+
+async function renderProjectDocuments(main, projectId) {
+  main.innerHTML = `<p class="subtitle">Loading…</p>`;
+  let project, documents;
+  try {
+    project = await api('/projects/' + projectId);
+    documents = await api('/projects/' + projectId + '/documents');
+  } catch (e) {
+    main.innerHTML = `<button class="back-link" id="back-to-projects">&larr; Back to Projects</button><p class="error-text">${escapeHtml(e.message)}</p>`;
+    main.querySelector('#back-to-projects').addEventListener('click', () => setView('projects'));
+    return;
+  }
+
+  const isManager = state.me.isAdmin || project.createdBy === state.me.id;
+
+  const rowsHtml = documents.length === 0
+    ? emptyStateRowHtml('No documents uploaded yet.', 6)
+    : documents.map(d => `
+        <tr class="task-row-clickable" data-open-doc="${d.id}">
+          <td>
+            <strong>${escapeHtml(d.docNumber)}</strong>
+            ${d.description ? `<div class="hint">${escapeHtml(d.description)}</div>` : ''}
+          </td>
+          <td>${escapeHtml(d.version)}</td>
+          <td>
+            <span class="badge badge-current">Current</span>
+            ${d.versionCount > 1 ? `<div class="hint">${d.versionCount} versions</div>` : ''}
+          </td>
+          <td>${d.uploader ? escapeHtml(d.uploader.name) : '—'}</td>
+          <td>${formatDate(d.uploadedAt.slice(0, 10))}</td>
+          <td><a href="#" data-download-doc data-file-url="${escapeHtml(d.fileUrl)}" data-file-name="${escapeHtml(d.originalFileName)}">Download</a></td>
+        </tr>
+      `).join('');
+
+  main.innerHTML = `
+    <button class="back-link" id="back-to-projects">&larr; Back to Projects</button>
+    <h1>${escapeHtml(project.name)}</h1>
+    <p class="subtitle">Document register — current drawing/spec versions for this project. Click a document to see its version history.</p>
+    ${projectTabsHtml('project-documents')}
+
+    ${isManager ? `
+    <div class="card">
+      <h2>Upload Document</h2>
+      <form id="document-upload-form">
+        <div class="form-row">
+          <div><label>Document Name/Number</label><input name="docNumber" required placeholder="e.g. Foundation Plan - Block C" /></div>
+          <div><label>Version</label><input name="version" required placeholder="e.g. Rev 3" /></div>
+        </div>
+        <div><label>Description (optional)</label><input name="description" placeholder="What changed in this version" /></div>
+        <div><label>File</label><input name="file" type="file" required /></div>
+        <div class="hint">If this name/number matches an existing document, this upload becomes its new current version — the previous one is kept, marked "Superseded".</div>
+        <div id="document-form-error" class="error-text"></div>
+        <button class="btn" type="submit">Upload</button>
+      </form>
+    </div>
+    ` : ''}
+
+    <div class="card">
+      <h2>Documents</h2>
+      <table>
+        <thead><tr><th>Document</th><th>Current Version</th><th>Status</th><th>Uploaded By</th><th>Uploaded</th><th></th></tr></thead>
+        <tbody>${rowsHtml}</tbody>
+      </table>
+    </div>
+    <div id="document-modal-root"></div>
+  `;
+
+  main.querySelector('#back-to-projects').addEventListener('click', () => setView('projects'));
+  bindProjectTabs(main, projectId);
+
+  bindDocumentDownloadLinks(main);
+
+  main.querySelectorAll('[data-open-doc]').forEach(row => {
+    row.addEventListener('click', (e) => {
+      if (e.target.closest('a, button, input')) return;
+      showDocumentHistoryModal(main, Number(row.dataset.openDoc));
+    });
+  });
+
+  const form = main.querySelector('#document-upload-form');
+  if (form) {
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const errBox = form.querySelector('#document-form-error');
+      errBox.textContent = '';
+      const fileInput = form.querySelector('input[type="file"]');
+      if (!fileInput.files[0]) {
+        errBox.textContent = 'Please choose a file to upload.';
+        return;
+      }
+      const submitBtn = form.querySelector('button[type="submit"]');
+      submitBtn.disabled = true;
+      try {
+        const formData = new FormData();
+        formData.append('docNumber', form.docNumber.value);
+        formData.append('version', form.version.value);
+        formData.append('description', form.description.value);
+        formData.append('file', fileInput.files[0]);
+        await apiUpload('/projects/' + projectId + '/documents', formData);
+        renderProjectDocuments(main, projectId);
+      } catch (err) {
+        submitBtn.disabled = false;
+        errBox.textContent = err.message;
+      }
+    });
+  }
+}
+
+// Document files sit behind the same gate+session auth as everything else
+// under /uploads, so a plain <a href> can't fetch them directly (it can't
+// attach the custom auth headers) — same blob-URL-download workaround used
+// for photos/audio elsewhere in the app.
+function bindDocumentDownloadLinks(container) {
+  container.querySelectorAll('[data-download-doc]').forEach(link => {
+    link.addEventListener('click', async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      try {
+        const blobUrl = await authenticatedBlobUrl(link.dataset.fileUrl);
+        const a = document.createElement('a');
+        a.href = blobUrl;
+        a.download = link.dataset.fileName || 'document';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(blobUrl), 30000);
+      } catch (err) {
+        alert('Could not download the file: ' + err.message);
+      }
+    });
+  });
+}
+
+async function showDocumentHistoryModal(main, docId) {
+  const modalRoot = main.querySelector('#document-modal-root');
+  if (!modalRoot) return;
+
+  let data;
+  try {
+    data = await api('/documents/' + docId + '/versions');
+  } catch (e) {
+    alert(e.message);
+    return;
+  }
+
+  const { docNumber, versions } = data;
+
+  modalRoot.innerHTML = `
+    <div class="modal-overlay" id="document-modal-overlay">
+      <div class="modal-card modal-card-wide">
+        <button class="modal-close" id="document-modal-close">&times;</button>
+        <h2>${escapeHtml(docNumber)}</h2>
+        <p class="subtitle">Version history</p>
+        <div class="import-preview-scroll">
+          <table>
+            <thead><tr><th>Version</th><th>Status</th><th>Description</th><th>Uploaded By</th><th>Uploaded</th><th></th></tr></thead>
+            <tbody>
+              ${versions.map(v => `
+                <tr>
+                  <td><strong>${escapeHtml(v.version)}</strong></td>
+                  <td><span class="badge ${v.isCurrent ? 'badge-current' : 'badge-superseded'}">${v.isCurrent ? 'Current' : 'Superseded'}</span></td>
+                  <td>${v.description ? escapeHtml(v.description) : '<span class="hint">—</span>'}</td>
+                  <td>${v.uploader ? escapeHtml(v.uploader.name) : '—'}</td>
+                  <td>${formatDate(v.uploadedAt.slice(0, 10))}</td>
+                  <td><a href="#" data-download-doc data-file-url="${escapeHtml(v.fileUrl)}" data-file-name="${escapeHtml(v.originalFileName)}">Download</a></td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  `;
+
+  const overlay = document.getElementById('document-modal-overlay');
+  const close = () => { modalRoot.innerHTML = ''; };
+  document.getElementById('document-modal-close').addEventListener('click', close);
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+
+  bindDocumentDownloadLinks(modalRoot);
 }
 
 // ---------------- TEAM (admin) ----------------

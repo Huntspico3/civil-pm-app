@@ -246,6 +246,8 @@ h3 { font-size: 0.95rem; font-weight: 700; margin: 0 0 0.6rem; }
 .badge.stage-Completed { background: var(--stage-completed); }
 .badge.badge-outline { background: var(--bg); color: var(--text); border: 1px solid var(--border); font-weight: 600; }
 .badge.badge-overdue { background: var(--danger); color: white; }
+.badge.badge-current { background: var(--success); }
+.badge.badge-superseded { background: var(--text-muted); }
 
 .status {
   display: inline-block;

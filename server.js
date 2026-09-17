@@ -1030,6 +1030,131 @@ app.get('/api/my-rfis', requireAuth, (req, res) => {
   res.json({ user: targetUser, rfis: openRfis });
 });
 
+// --- document register (drawings/specs, per project, with version history) ---
+// Every upload is its own row — there's no separate "document" record. Which
+// row is "current" for a given docNumber is computed at read time (the
+// newest uploadedAt within that project+docNumber group) rather than stored,
+// so it can never drift out of sync with what was actually uploaded.
+
+const documentUpload = multer({
+  storage: multer.diskStorage({
+    destination: (req, file, cb) => cb(null, UPLOADS_DIR),
+    filename: (req, file, cb) => cb(null, crypto.randomUUID() + path.extname(file.originalname || '').toLowerCase())
+  }),
+  limits: { fileSize: 50 * 1024 * 1024 }, // drawings/specs run larger than the photo/audio uploads above
+  fileFilter: (req, file, cb) => {
+    const ext = path.extname(file.originalname || '').toLowerCase();
+    if (!fileValidation.isAllowedDocumentExtension(ext)) {
+      return cb(new Error(`".${ext.replace(/^\./, '') || '?'}" isn't an accepted document type`));
+    }
+    cb(null, true);
+  }
+});
+
+function enrichDocument(doc, data, extra) {
+  return {
+    ...doc,
+    fileUrl: '/uploads/' + doc.fileName,
+    uploader: data.users.find(u => u.id === doc.uploadedBy) || null,
+    ...extra
+  };
+}
+
+function documentGroupKey(doc) {
+  return doc.docNumber.trim().toLowerCase();
+}
+
+app.get('/api/projects/:id/documents', requireAuth, (req, res) => {
+  const data = db.load();
+  const project = data.projects.find(p => p.id === Number(req.params.id));
+  if (!project) return res.status(404).json({ error: 'Project not found' });
+  if (!canSeeProject(req.user, project, data.tasks)) return res.status(403).json({ error: 'Not visible to you' });
+
+  const groups = new Map();
+  data.documents.filter(d => d.projectId === project.id).forEach(d => {
+    const key = documentGroupKey(d);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(d);
+  });
+
+  const current = Array.from(groups.values()).map(versions => {
+    const sorted = versions.slice().sort((a, b) => b.uploadedAt.localeCompare(a.uploadedAt));
+    return enrichDocument(sorted[0], data, { versionCount: sorted.length });
+  });
+  current.sort((a, b) => a.docNumber.localeCompare(b.docNumber));
+
+  res.json(current);
+});
+
+app.post('/api/projects/:id/documents', requireAuth, documentUpload.single('file'), (req, res) => {
+  const cleanup = () => { if (req.file) fs.unlink(req.file.path, () => {}); };
+  try {
+    const data = db.load();
+    const project = data.projects.find(p => p.id === Number(req.params.id));
+    if (!project) {
+      cleanup();
+      return res.status(404).json({ error: 'Project not found' });
+    }
+    if (!isThisProjectManager(req.user, project)) {
+      cleanup();
+      return res.status(403).json({ error: "Only an admin or this project's manager can upload documents" });
+    }
+    if (!req.file) return res.status(400).json({ error: 'A file is required' });
+
+    const docNumber = (req.body.docNumber || '').trim();
+    const version = (req.body.version || '').trim();
+    const description = (req.body.description || '').trim();
+    if (!docNumber || !version) {
+      cleanup();
+      return res.status(400).json({ error: 'Document name/number and version are required' });
+    }
+
+    // Same don't-trust-the-claimed-type check as the photo/audio/import
+    // uploads elsewhere in this file, now applied to the document register.
+    const ext = path.extname(req.file.filename).toLowerCase();
+    if (!fileValidation.isValidDocumentFile(req.file.path, ext)) {
+      cleanup();
+      return res.status(400).json({ error: "The uploaded file's content doesn't match its file type." });
+    }
+
+    const document = {
+      id: db.nextId('document'),
+      projectId: project.id,
+      docNumber,
+      version,
+      description,
+      fileName: req.file.filename,
+      originalFileName: req.file.originalname,
+      uploadedBy: req.user.id,
+      uploadedAt: new Date().toISOString()
+    };
+    data.documents.push(document);
+    db.save(data);
+    res.status(201).json(enrichDocument(document, data, { versionCount: data.documents.filter(d => d.projectId === project.id && documentGroupKey(d) === documentGroupKey(document)).length }));
+  } catch (err) {
+    cleanup();
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/documents/:id/versions', requireAuth, (req, res) => {
+  const data = db.load();
+  const doc = data.documents.find(d => d.id === Number(req.params.id));
+  if (!doc) return res.status(404).json({ error: 'Document not found' });
+  const project = data.projects.find(p => p.id === doc.projectId);
+  if (!project || !canSeeProject(req.user, project, data.tasks)) {
+    return res.status(403).json({ error: 'Not visible to you' });
+  }
+
+  const key = documentGroupKey(doc);
+  const versions = data.documents
+    .filter(d => d.projectId === doc.projectId && documentGroupKey(d) === key)
+    .sort((a, b) => b.uploadedAt.localeCompare(a.uploadedAt))
+    .map((d, i) => enrichDocument(d, data, { isCurrent: i === 0 }));
+
+  res.json({ docNumber: doc.docNumber, versions });
+});
+
 // --- portfolio timeline (org-wide, visible to every logged-in user) ---
 app.get('/api/portfolio', requireAuth, (req, res) => {
   const data = db.load();

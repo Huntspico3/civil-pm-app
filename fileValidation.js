@@ -82,4 +82,48 @@ function isValidXlsxBuffer(buffer) {
   return ZIP_SIGNATURE.every((byte, i) => buffer[i] === byte);
 }
 
-module.exports = { isValidImageFile, isValidAudioFile, detectImageExt, detectAudioExt, isValidXlsxBuffer };
+// Document Register uploads: PDFs, Office documents, and images, checked
+// against their real signature the same way as everything else above. Office
+// Open XML formats (.docx/.xlsx/.pptx) are zip archives, same as .xlsx
+// above; legacy binary Office formats (.doc/.xls/.ppt) share one common OLE
+// compound-file signature. A couple of common CAD formats (.dwg, .dxf) have
+// no single reliable signature across every authoring tool/version, so those
+// are allowed by extension only — everything else here is positively
+// verified against its actual bytes, not just its claimed name.
+const PDF_SIGNATURE = [0x25, 0x50, 0x44, 0x46]; // %PDF
+const OLE_SIGNATURE = [0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1]; // legacy .doc/.xls/.ppt
+
+function isValidPdfFile(filePath) {
+  return matchesSignature(readFileHeader(filePath, 8), { bytes: PDF_SIGNATURE });
+}
+function isValidOleFile(filePath) {
+  return matchesSignature(readFileHeader(filePath, 8), { bytes: OLE_SIGNATURE });
+}
+function isValidZipFile(filePath) {
+  return matchesSignature(readFileHeader(filePath, 4), { bytes: ZIP_SIGNATURE });
+}
+
+const DOCUMENT_VALIDATORS = {
+  '.pdf': isValidPdfFile,
+  '.doc': isValidOleFile, '.xls': isValidOleFile, '.ppt': isValidOleFile,
+  '.docx': isValidZipFile, '.xlsx': isValidZipFile, '.pptx': isValidZipFile, '.zip': isValidZipFile,
+  '.jpg': isValidImageFile, '.jpeg': isValidImageFile, '.png': isValidImageFile, '.gif': isValidImageFile, '.webp': isValidImageFile,
+  '.dwg': null, '.dxf': null, '.txt': null, '.csv': null
+};
+
+function isAllowedDocumentExtension(ext) {
+  return Object.prototype.hasOwnProperty.call(DOCUMENT_VALIDATORS, String(ext).toLowerCase());
+}
+
+// True if the file's actual content matches what its (already-allowlisted)
+// extension claims, or true unconditionally for the few extensions above
+// with no reliable signature to check.
+function isValidDocumentFile(filePath, ext) {
+  const validator = DOCUMENT_VALIDATORS[String(ext).toLowerCase()];
+  return validator ? validator(filePath) : true;
+}
+
+module.exports = {
+  isValidImageFile, isValidAudioFile, detectImageExt, detectAudioExt, isValidXlsxBuffer,
+  isAllowedDocumentExtension, isValidDocumentFile
+};
