@@ -982,6 +982,18 @@ async function renderProjectDetail(main, projectId) {
     return html;
   }
 
+  const summaryHtml = `
+    <div class="card">
+      <h2>Weekly Summary</h2>
+      ${project.summary
+        ? `
+          <p class="hint">Generated ${formatDate(project.summary.generatedAt.slice(0, 10))}</p>
+          <div class="summary-text">${project.summary.text.split(/\n+/).filter(p => p.trim()).map(p => `<p>${escapeHtml(p.trim())}</p>`).join('')}</div>
+        `
+        : emptyStateHtml('No weekly summary yet — one is generated automatically, usually within the first week.')}
+    </div>
+  `;
+
   const taskRows = tasks.length === 0
     ? emptyStateRowHtml(hasActiveTaskFilters(filters) ? 'No tasks match these filters.' : 'No tasks yet.', 6)
     : tasks.map(t => {
@@ -1016,6 +1028,8 @@ async function renderProjectDetail(main, projectId) {
     <div class="gantt-progress-track" style="max-width:260px;"><div class="gantt-progress-fill" style="width:${project.progress || 0}%; background:${project.color || '#1e3a5f'};"></div></div>
     <p class="hint">${project.progress || 0}% complete${project.progressMode === 'manual' ? ' (manual override)' : ` (auto — average across ${project.taskProgress ? project.taskProgress.total : 0} task${project.taskProgress && project.taskProgress.total === 1 ? '' : 's'})`}</p>
     ${projectTabsHtml('project')}
+
+    ${summaryHtml}
 
     <div class="card">
       <div class="section-header">

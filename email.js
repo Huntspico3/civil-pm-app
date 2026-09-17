@@ -46,4 +46,35 @@ async function sendRfiAssignedEmail({ to, toName, projectName, question, askedBy
   }
 }
 
-module.exports = { sendRfiAssignedEmail };
+// Fire-and-forget, same as the RFI notification above: a failed/unconfigured
+// email should never block the weekly summary from being saved and shown in
+// the app.
+async function sendProjectSummaryEmail({ to, toName, projectName, summaryText }) {
+  const t = getTransporter();
+  if (!t) {
+    if (!warnedMissingConfig) {
+      warnedMissingConfig = true;
+      console.warn(
+        'Email notifications are not configured (missing SMTP_HOST/SMTP_USER/SMTP_PASS). ' +
+        'Skipping email — the weekly summary was still generated and saved normally.'
+      );
+    }
+    return;
+  }
+
+  const from = process.env.EMAIL_FROM || process.env.SMTP_USER;
+  const subject = `Weekly summary: ${projectName}`;
+  const text =
+    `Hi ${toName},\n\n` +
+    `Here's this week's summary for "${projectName}":\n\n` +
+    `${summaryText}\n\n` +
+    `Log in to the Civil PM app for full details.\n`;
+
+  try {
+    await t.sendMail({ from, to, subject, text });
+  } catch (err) {
+    console.warn('Failed to send weekly project summary email:', err.message);
+  }
+}
+
+module.exports = { sendRfiAssignedEmail, sendProjectSummaryEmail };

@@ -77,7 +77,8 @@ function seed() {
         stage: 'Construction',
         color: PROJECT_COLOR_PALETTE[0],
         progress: 60,
-        progressMode: 'auto'
+        progressMode: 'auto',
+        summary: null
       },
       {
         id: 2,
@@ -89,17 +90,18 @@ function seed() {
         stage: 'Design',
         color: PROJECT_COLOR_PALETTE[1],
         progress: 20,
-        progressMode: 'auto'
+        progressMode: 'auto',
+        summary: null
       }
     ],
     tasks: [
-      { id: 1, projectId: 1, title: 'Deck load rating analysis', description: 'Run updated load rating for the bridge deck.', requiredRole: 'Structural', assigneeId: 2, status: 'In Progress', progress: 40, dueDate: '2026-10-01' },
-      { id: 2, projectId: 1, title: 'Pier foundation soil report', description: 'Review boring logs and assess pier settlement risk.', requiredRole: 'Geotechnical', assigneeId: 3, status: 'To Do', progress: 0, dueDate: '2026-10-15' },
-      { id: 3, projectId: 1, title: 'Erosion control plan', description: 'Draft erosion & sediment control plan for the riverbank work zone.', requiredRole: 'Environmental', assigneeId: 4, status: 'To Do', progress: 0, dueDate: null },
-      { id: 4, projectId: 2, title: 'Storm drainage design', description: 'Size new storm drains for the widened corridor.', requiredRole: 'Civil', assigneeId: 1, status: 'To Do', progress: 0, dueDate: '2026-11-01' },
-      { id: 5, projectId: 2, title: 'Signal timing plan', description: 'Develop signal timing plan for the two new intersections.', requiredRole: 'Transportation', assigneeId: 5, status: 'In Progress', progress: 60, dueDate: '2026-10-20' },
-      { id: 6, projectId: 2, title: 'Retaining wall check', description: 'Check retaining wall stability near station 3+00.', requiredRole: 'Structural', assigneeId: 2, status: 'Done', progress: 100, dueDate: '2026-09-01' },
-      { id: 7, projectId: 2, title: 'Wetland impact review', description: 'Assess corridor impact on adjacent wetland buffer.', requiredRole: 'Environmental', assigneeId: null, status: 'To Do', progress: 0, dueDate: null }
+      { id: 1, projectId: 1, title: 'Deck load rating analysis', description: 'Run updated load rating for the bridge deck.', requiredRole: 'Structural', assigneeId: 2, status: 'In Progress', progress: 40, dueDate: '2026-10-01', completedAt: null },
+      { id: 2, projectId: 1, title: 'Pier foundation soil report', description: 'Review boring logs and assess pier settlement risk.', requiredRole: 'Geotechnical', assigneeId: 3, status: 'To Do', progress: 0, dueDate: '2026-10-15', completedAt: null },
+      { id: 3, projectId: 1, title: 'Erosion control plan', description: 'Draft erosion & sediment control plan for the riverbank work zone.', requiredRole: 'Environmental', assigneeId: 4, status: 'To Do', progress: 0, dueDate: null, completedAt: null },
+      { id: 4, projectId: 2, title: 'Storm drainage design', description: 'Size new storm drains for the widened corridor.', requiredRole: 'Civil', assigneeId: 1, status: 'To Do', progress: 0, dueDate: '2026-11-01', completedAt: null },
+      { id: 5, projectId: 2, title: 'Signal timing plan', description: 'Develop signal timing plan for the two new intersections.', requiredRole: 'Transportation', assigneeId: 5, status: 'In Progress', progress: 60, dueDate: '2026-10-20', completedAt: null },
+      { id: 6, projectId: 2, title: 'Retaining wall check', description: 'Check retaining wall stability near station 3+00.', requiredRole: 'Structural', assigneeId: 2, status: 'Done', progress: 100, dueDate: '2026-09-01', completedAt: null },
+      { id: 7, projectId: 2, title: 'Wetland impact review', description: 'Assess corridor impact on adjacent wetland buffer.', requiredRole: 'Environmental', assigneeId: null, status: 'To Do', progress: 0, dueDate: null, completedAt: null }
     ],
     externalContacts: [
       { id: 1, name: 'John Carter', company: 'ABC Groundworks Ltd', category: 'Subcontractor', phone: '555-0201', email: 'john.carter@abcgroundworks.example', projectId: 2 },
@@ -235,6 +237,11 @@ function backfillSchema(data) {
         p.progressMode = 'auto';
         changed = true;
       }
+      // The weekly AI summary is optional until the first one is generated.
+      if (!('summary' in p)) {
+        p.summary = null;
+        changed = true;
+      }
     });
   }
   // Tasks created before per-task progress existed won't have it yet. Default
@@ -254,6 +261,15 @@ function backfillSchema(data) {
       // null is a valid "no due date set" state, same as for RFIs.
       if (!('dueDate' in t)) {
         t.dueDate = null;
+        changed = true;
+      }
+      // completedAt only tracks transitions to "Done" going forward (set by
+      // the PATCH endpoint) — there's no reliable way to know when an
+      // already-Done task actually finished, so it backfills to null rather
+      // than guessing. It simply won't count toward "completed this week"
+      // until it's marked Done again.
+      if (!('completedAt' in t)) {
+        t.completedAt = null;
         changed = true;
       }
     });

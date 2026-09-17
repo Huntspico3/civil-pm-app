@@ -436,7 +436,8 @@ app.post('/api/projects/:id/tasks', requireAuth, (req, res) => {
     assigneeId: assignee ? assignee.id : null,
     status: data.taskStatuses[0],
     progress: 0,
-    dueDate: dueDate || null
+    dueDate: dueDate || null,
+    completedAt: null
   };
   data.tasks.push(task);
   db.save(data);
@@ -497,6 +498,7 @@ app.post('/api/projects/:id/tasks/import/confirm', requireAuth, (req, res) => {
   const toCreate = validated.filter(r => r.errors.length === 0);
   const skipped = validated.filter(r => r.errors.length > 0);
 
+  const doneStatus = data.taskStatuses[data.taskStatuses.length - 1];
   const created = toCreate.map(r => {
     const task = {
       id: db.nextId('task'),
@@ -506,8 +508,9 @@ app.post('/api/projects/:id/tasks/import/confirm', requireAuth, (req, res) => {
       requiredRole: r.requiredRole,
       assigneeId: r.assigneeId || null,
       status: r.status,
-      progress: 0,
-      dueDate: r.dueDate || null
+      progress: r.status === doneStatus ? 100 : 0,
+      dueDate: r.dueDate || null,
+      completedAt: r.status === doneStatus ? new Date().toISOString() : null
     };
     data.tasks.push(task);
     return task;
@@ -552,6 +555,13 @@ app.patch('/api/tasks/:id', requireAuth, (req, res) => {
   }
   if (status !== undefined) {
     if (!data.taskStatuses.includes(status)) return res.status(400).json({ error: 'Invalid status' });
+    const doneStatus = data.taskStatuses[data.taskStatuses.length - 1];
+    if (status === doneStatus && task.status !== doneStatus) {
+      task.completedAt = new Date().toISOString();
+    } else if (status !== doneStatus) {
+      // Reopened (or never was Done) — it no longer counts as a completion.
+      task.completedAt = null;
+    }
     task.status = status;
   }
   if (progress !== undefined) {
@@ -1047,6 +1057,93 @@ app.get('/api/portfolio', requireAuth, (req, res) => {
   });
   res.json(portfolio);
 });
+
+// --- weekly AI project summary ---
+// Once a week, per project: a short plain-English briefing covering tasks
+// completed that week, tasks still open, overdue tasks, open (especially
+// overdue) RFIs, and current overall progress — written by Claude, shown on
+// the project's page, and emailed to that project's manager and every admin.
+// Deliberately simple: one summary per project, no scheduling UI, no
+// per-project opt-out — just an in-process check that runs shortly after
+// startup and then hourly, regenerating any project whose last summary (or
+// lack of one) is 7+ days old. A project only actually gets a new summary
+// (and a new email) once per week no matter how often the check itself runs.
+
+const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+const SUMMARY_CHECK_INTERVAL_MS = 60 * 60 * 1000;
+
+function buildProjectSummaryStats(project, data) {
+  const today = new Date().toISOString().slice(0, 10);
+  const weekAgoIso = new Date(Date.now() - WEEK_MS).toISOString();
+  const doneStatus = data.taskStatuses[data.taskStatuses.length - 1];
+  const tasks = data.tasks.filter(t => t.projectId === project.id);
+
+  const withAssignee = (t) => ({ ...t, assignee: data.users.find(u => u.id === t.assigneeId) || null });
+  const completedThisWeek = tasks.filter(t => t.completedAt && t.completedAt >= weekAgoIso).map(withAssignee);
+  const openTasks = tasks.filter(t => t.status !== doneStatus).map(withAssignee);
+  const overdueTasks = openTasks.filter(t => t.dueDate && t.dueDate < today);
+  const openRfis = data.rfis.filter(r => r.projectId === project.id && !r.answer);
+  const overdueRfis = openRfis.filter(r => r.dueDate < today);
+
+  return {
+    completedThisWeek,
+    openTasks,
+    overdueTasks,
+    openRfis,
+    overdueRfis,
+    progress: withComputedProgress(project, data).progress,
+    totalTasks: tasks.length
+  };
+}
+
+// A project's manager (its creator) plus every admin, de-duplicated so
+// someone who is both doesn't get the email twice.
+function summaryRecipients(project, data) {
+  const recipients = [];
+  const manager = data.users.find(u => u.id === project.createdBy);
+  if (manager) recipients.push(manager);
+  data.users.forEach(u => {
+    if (u.isAdmin && !recipients.some(r => r.id === u.id)) recipients.push(u);
+  });
+  return recipients;
+}
+
+async function generateAndSaveProjectSummary(project, data) {
+  const stats = buildProjectSummaryStats(project, data);
+  let text;
+  try {
+    text = await ai.generateProjectSummary({ projectName: project.name, stats });
+  } catch (err) {
+    console.warn(`Weekly summary generation failed for project "${project.name}":`, err.message);
+    return;
+  }
+  if (!text) return;
+
+  project.summary = { text, generatedAt: new Date().toISOString() };
+  db.save(data);
+
+  summaryRecipients(project, data).forEach(u => {
+    email.sendProjectSummaryEmail({ to: u.email, toName: u.name, projectName: project.name, summaryText: text })
+      .catch(() => {}); // sendProjectSummaryEmail already logs its own failures; never let one bad email break the loop
+  });
+}
+
+async function runWeeklySummaryCheck() {
+  const data = db.load();
+  for (const project of data.projects) {
+    const last = project.summary && project.summary.generatedAt ? new Date(project.summary.generatedAt).getTime() : 0;
+    if (Date.now() - last >= WEEK_MS) {
+      await generateAndSaveProjectSummary(project, data);
+    }
+  }
+}
+
+setTimeout(() => {
+  runWeeklySummaryCheck().catch(err => console.warn('Weekly summary check failed:', err.message));
+}, 15000); // a short delay after boot, not at the instant the server starts taking traffic
+setInterval(() => {
+  runWeeklySummaryCheck().catch(err => console.warn('Weekly summary check failed:', err.message));
+}, SUMMARY_CHECK_INTERVAL_MS);
 
 // Multer (and other upload) errors land here instead of the default HTML error page.
 app.use((err, req, res, next) => {
