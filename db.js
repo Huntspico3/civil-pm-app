@@ -78,7 +78,10 @@ function seed() {
         color: PROJECT_COLOR_PALETTE[0],
         progress: 60,
         progressMode: 'auto',
-        summary: null
+        summary: null,
+        location: null,
+        latitude: null,
+        longitude: null
       },
       {
         id: 2,
@@ -91,7 +94,10 @@ function seed() {
         color: PROJECT_COLOR_PALETTE[1],
         progress: 20,
         progressMode: 'auto',
-        summary: null
+        summary: null,
+        location: null,
+        latitude: null,
+        longitude: null
       }
     ],
     tasks: [
@@ -244,6 +250,13 @@ function backfillSchema(data) {
       // The weekly AI summary is optional until the first one is generated.
       if (!('summary' in p)) {
         p.summary = null;
+        changed = true;
+      }
+      // Weather is opt-in — no location set means no forecast shown, not an error.
+      if (!('location' in p)) {
+        p.location = null;
+        p.latitude = null;
+        p.longitude = null;
         changed = true;
       }
     });

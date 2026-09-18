@@ -720,6 +720,45 @@ body.gantt-dragging { user-select: none; }
 .summary-text p { margin: 0 0 0.75rem; line-height: 1.6; }
 .summary-text p:last-child { margin-bottom: 0; }
 
+/* ============ WEATHER ============ */
+/* A row of small day cards; .weather-strip-compact (used on the Portfolio
+   Gantt row, where space is tight) drops the day label and temperature down
+   to icon-only. Either way, an impactful day gets a red ring and a ⚠ badge. */
+
+.weather-strip { display: flex; gap: 0.4rem; margin-top: 0.5rem; flex-wrap: wrap; }
+.weather-day {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.15rem;
+  min-width: 2.6rem;
+  padding: 0.35rem 0.3rem;
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  border: 1px solid var(--border);
+}
+.weather-day-label { font-size: 0.68rem; font-weight: 700; color: var(--text-muted); text-transform: uppercase; }
+.weather-day-icon { font-size: 1.15rem; line-height: 1; }
+.weather-day-temp { font-size: 0.72rem; color: var(--text-muted); }
+.weather-day-impact { border-color: var(--danger); background: var(--danger-bg); }
+.weather-day-flag {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  font-size: 0.62rem;
+  background: var(--danger);
+  color: white;
+  border-radius: 999px;
+  width: 15px;
+  height: 15px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.weather-strip-compact .weather-day { min-width: 1.8rem; padding: 0.2rem; gap: 0; }
+.weather-strip-compact .weather-day-icon { font-size: 0.95rem; }
+
 /* ============ SNAGS / DEFECTS ============ */
 
 .snag-card { cursor: pointer; }

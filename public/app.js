@@ -1031,6 +1031,7 @@ async function renderProjectDetail(main, projectId) {
     <p class="subtitle">${escapeHtml(project.description || '')}</p>
     <div class="gantt-progress-track" style="max-width:260px;"><div class="gantt-progress-fill" style="width:${project.progress || 0}%; background:${project.color || '#1e3a5f'};"></div></div>
     <p class="hint">${project.progress || 0}% complete${project.progressMode === 'manual' ? ' (manual override)' : ` (auto — average across ${project.taskProgress ? project.taskProgress.total : 0} task${project.taskProgress && project.taskProgress.total === 1 ? '' : 's'})`}</p>
+    ${project.location ? `<p class="hint">${escapeHtml(project.location)}</p><div id="project-weather"></div>` : ''}
     ${projectTabsHtml('project')}
 
     ${summaryHtml}
@@ -1102,6 +1103,7 @@ async function renderProjectDetail(main, projectId) {
   bindProjectTabs(main, projectId);
   bindTaskFilterBar(main, filters, () => renderProjectDetail(main, projectId));
   bindPaginationBar(main, filters, () => renderProjectDetail(main, projectId));
+  if (project.location) loadWeatherInto(main.querySelector('#project-weather'), projectId, {});
 
   main.querySelectorAll('[data-view-report]').forEach(el => {
     el.addEventListener('click', () => showReportModal(main, Number(el.dataset.viewReport), false));
@@ -2333,6 +2335,62 @@ async function renderSettings(main) {
   bindSettingsSections(main);
 }
 
+// ---------------- WEATHER (shared by Portfolio Timeline + project pages) ----------------
+// A project's forecast is fetched lazily (after the page it appears on has
+// already rendered) and dropped into a placeholder element, the same way
+// photo/audio blobs load in elsewhere — so a slow or failed weather request
+// never blocks or breaks the page it's shown on.
+
+const WEATHER_ICONS = {
+  0: '☀️', 1: '🌤️', 2: '⛅', 3: '☁️',
+  45: '🌫️', 48: '🌫️',
+  51: '🌦️', 53: '🌦️', 55: '🌦️', 56: '🌦️', 57: '🌦️',
+  61: '🌧️', 63: '🌧️', 65: '🌧️', 66: '🌧️', 67: '🌧️', 80: '🌧️', 81: '🌧️', 82: '🌧️',
+  71: '❄️', 73: '❄️', 75: '❄️', 77: '❄️', 85: '❄️', 86: '❄️',
+  95: '⛈️', 96: '⛈️', 99: '⛈️'
+};
+function weatherIcon(code) {
+  return WEATHER_ICONS[code] || '🌡️';
+}
+
+// `compact` (used on the Portfolio Gantt row, where space is tight) shows
+// icons only; the fuller version (project modal, project page) adds the day
+// label and high temp. Either way, a day flagged impactful gets a visible
+// ring and a ⚠ badge, and every day's title tooltip spells out why.
+function weatherStripHtml(forecast, opts) {
+  opts = opts || {};
+  if (!forecast || forecast.length === 0) return '';
+  return `
+    <div class="weather-strip${opts.compact ? ' weather-strip-compact' : ''}">
+      ${forecast.map(d => {
+        const dayLabel = new Date(d.date + 'T00:00:00').toLocaleDateString(undefined, { weekday: 'short' });
+        const title = `${dayLabel} ${formatDate(d.date)}: high ${Math.round(d.tempMax)}°C, low ${Math.round(d.tempMin)}°C — ${d.impactful ? d.impactReasons.join(', ') : 'no significant impact expected'}`;
+        return `
+          <div class="weather-day${d.impactful ? ' weather-day-impact' : ''}" title="${escapeHtml(title)}">
+            ${opts.compact ? '' : `<div class="weather-day-label">${escapeHtml(dayLabel)}</div>`}
+            <div class="weather-day-icon">${weatherIcon(d.weatherCode)}</div>
+            ${opts.compact ? '' : `<div class="weather-day-temp">${Math.round(d.tempMax)}&deg;</div>`}
+            ${d.impactful ? '<div class="weather-day-flag">&#9888;</div>' : ''}
+          </div>
+        `;
+      }).join('')}
+    </div>
+  `;
+}
+
+// Fetches and renders straight into `container`; silently leaves it empty
+// on any failure (no location set, API hiccup, etc.) rather than showing an
+// error in what's meant to be a small, low-stakes widget.
+async function loadWeatherInto(container, projectId, opts) {
+  if (!container) return;
+  try {
+    const forecast = await api('/projects/' + projectId + '/weather');
+    container.innerHTML = weatherStripHtml(forecast, opts);
+  } catch (e) {
+    container.innerHTML = '';
+  }
+}
+
 // ---------------- PORTFOLIO TIMELINE ----------------
 
 function formatDate(str) {
@@ -2401,6 +2459,7 @@ async function renderPortfolio(main) {
           <span class="badge stage-${escapeHtml(p.stage)}">${escapeHtml(p.stage)}</span>
           <div class="gantt-progress-track"><div class="gantt-progress-fill" style="width:${progress}%; background:${color};"></div></div>
           <span class="hint gantt-progress-pct">${progress}% complete</span>
+          ${p.location ? `<div data-weather-for="${p.id}"></div>` : ''}
         </div>
         <div class="gantt-track">
           <div class="gantt-bar${canEdit ? ' gantt-bar-draggable' : ''}" data-project="${p.id}" style="left:${left}%; width:${width}%; background:${color};" title="${escapeHtml(p.name)} — ${progress}% complete">
@@ -2430,6 +2489,10 @@ async function renderPortfolio(main) {
   `;
 
   bindGanttBarInteractions(main, projects, rangeMin, rangeSpan);
+
+  main.querySelectorAll('[data-weather-for]').forEach(el => {
+    loadWeatherInto(el, Number(el.dataset.weatherFor), { compact: true });
+  });
 }
 
 const GANTT_DAY_MS = 24 * 60 * 60 * 1000;
@@ -2653,6 +2716,16 @@ function showProjectModal(project, boardMain) {
       <p class="hint">${escapeHtml(progressHint)}</p>
     `;
 
+  const locationHtml = canEdit
+    ? `
+      <div>
+        <label>Location (for weather forecast)</label>
+        <input type="text" id="project-modal-location" value="${escapeHtml(project.location || '')}" placeholder="e.g. Denver, CO" />
+      </div>
+      <div id="project-modal-location-error" class="error-text"></div>
+    `
+    : (project.location ? `<p class="hint">Location: ${escapeHtml(project.location)}</p>` : '');
+
   modalRoot.innerHTML = `
     <div class="modal-overlay" id="project-modal-overlay">
       <div class="modal-card">
@@ -2665,6 +2738,8 @@ function showProjectModal(project, boardMain) {
           <div><label>End Date</label><div>${formatDate(project.endDate)}</div></div>
         </div>
         ${colorProgressHtml}
+        ${locationHtml}
+        <div id="project-modal-weather"></div>
         <h3>Assigned Team Members</h3>
         ${teamHtml}
       </div>
@@ -2675,6 +2750,29 @@ function showProjectModal(project, boardMain) {
   const close = () => { modalRoot.innerHTML = ''; };
   document.getElementById('project-modal-close').addEventListener('click', close);
   overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+
+  if (project.location) {
+    loadWeatherInto(document.getElementById('project-modal-weather'), project.id, {});
+  }
+
+  const locationInput = document.getElementById('project-modal-location');
+  if (locationInput) {
+    locationInput.addEventListener('change', async () => {
+      const locErrBox = document.getElementById('project-modal-location-error');
+      locErrBox.textContent = '';
+      try {
+        const updated = await api('/projects/' + project.id, {
+          method: 'PATCH',
+          body: JSON.stringify({ location: locationInput.value })
+        });
+        project.location = updated.location;
+        loadWeatherInto(document.getElementById('project-modal-weather'), project.id, {});
+        renderPortfolio(boardMain);
+      } catch (err) {
+        locErrBox.textContent = err.message;
+      }
+    });
+  }
 
   if (canEdit) {
     const errBox = document.getElementById('project-modal-error');

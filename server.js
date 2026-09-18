@@ -9,6 +9,7 @@ const email = require('./email');
 const auth = require('./auth');
 const fileValidation = require('./fileValidation');
 const taskImport = require('./taskImport');
+const weather = require('./weather');
 
 const UPLOADS_DIR = path.join(db.DATA_DIR, 'uploads');
 fs.mkdirSync(UPLOADS_DIR, { recursive: true });
@@ -339,7 +340,7 @@ app.get('/api/projects/:id', requireAuth, (req, res) => {
   res.json(withComputedProgress(project, data));
 });
 
-app.patch('/api/projects/:id', requireAuth, (req, res) => {
+app.patch('/api/projects/:id', requireAuth, async (req, res) => {
   const data = db.load();
   const project = data.projects.find(p => p.id === Number(req.params.id));
   if (!project) return res.status(404).json({ error: 'Project not found' });
@@ -347,7 +348,31 @@ app.patch('/api/projects/:id', requireAuth, (req, res) => {
   const canEdit = req.user.isAdmin || project.createdBy === req.user.id;
   if (!canEdit) return res.status(403).json({ error: 'Only an admin or this project\'s creator can edit it' });
 
-  const { color, progress, progressMode, startDate, endDate } = req.body;
+  const { color, progress, progressMode, startDate, endDate, location } = req.body;
+
+  // Resolved once here (not on every weather fetch) — the project just
+  // stores the coordinates the location string last resolved to.
+  if (location !== undefined) {
+    const trimmed = (location || '').trim();
+    if (!trimmed) {
+      project.location = null;
+      project.latitude = null;
+      project.longitude = null;
+    } else {
+      let resolved;
+      try {
+        resolved = await weather.geocodeLocation(trimmed);
+      } catch (err) {
+        return res.status(502).json({ error: `Could not look up that location right now: ${err.message}` });
+      }
+      if (!resolved) {
+        return res.status(400).json({ error: `Could not find "${trimmed}" — try a more specific place name (e.g. "Denver, CO").` });
+      }
+      project.location = resolved.displayName;
+      project.latitude = resolved.latitude;
+      project.longitude = resolved.longitude;
+    }
+  }
   if (color !== undefined) {
     if (!HEX_COLOR_RE.test(color)) return res.status(400).json({ error: 'Color must be a hex value like #2563eb' });
     project.color = color;
@@ -380,6 +405,28 @@ app.patch('/api/projects/:id', requireAuth, (req, res) => {
 
   db.save(data);
   res.json(withComputedProgress(project, data));
+});
+
+// A simple 5-7 day forecast for a project's location, with each day flagged
+// if it looks likely to disrupt outdoor work — used by the Portfolio
+// Timeline and the project's own page. Empty array (not an error) when the
+// project has no location set yet.
+app.get('/api/projects/:id/weather', requireAuth, async (req, res) => {
+  const data = db.load();
+  const project = data.projects.find(p => p.id === Number(req.params.id));
+  if (!project) return res.status(404).json({ error: 'Project not found' });
+  if (!canSeeProject(req.user, project, data.tasks)) return res.status(403).json({ error: 'Not visible to you' });
+
+  if (project.latitude == null || project.longitude == null) {
+    return res.json([]);
+  }
+
+  try {
+    const forecast = await weather.getForecast(project.latitude, project.longitude);
+    res.json(forecast);
+  } catch (err) {
+    res.status(502).json({ error: `Could not fetch the weather forecast: ${err.message}` });
+  }
 });
 
 // --- tasks ---
@@ -1388,6 +1435,9 @@ app.get('/api/portfolio', requireAuth, (req, res) => {
       progressMode: p.progressMode,
       taskProgress: enriched.taskProgress,
       createdBy: p.createdBy,
+      location: p.location,
+      latitude: p.latitude,
+      longitude: p.longitude,
       team
     };
   });
