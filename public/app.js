@@ -834,6 +834,32 @@ async function renderMyTasks(main) {
 
 // ---------------- PROJECTS ----------------
 
+// Plain substring match on name/description — a project list is small
+// enough (unlike tasks, which needed server-side search/pagination) that
+// filtering the already-fetched list client-side on every keystroke is
+// simple and instant, no debounce or round-trip needed.
+function filterProjects(projects, search) {
+  const needle = (search || '').trim().toLowerCase();
+  if (!needle) return projects;
+  return projects.filter(p =>
+    p.name.toLowerCase().includes(needle) || (p.description || '').toLowerCase().includes(needle)
+  );
+}
+
+function projectCardsHtml(projects) {
+  return `<div class="grid">${projects.map(p => `
+    <div class="card project-card" data-project="${p.id}">
+      <h3>${escapeHtml(p.name)}</h3>
+      <p>${escapeHtml(p.description || 'No description')}</p>
+      <div class="meta">
+        <span class="badge stage-${escapeHtml(p.stage)}">${escapeHtml(p.stage)}</span>
+        <span>${p.taskCount} task${p.taskCount === 1 ? '' : 's'}</span>
+        <span>${p.myTaskCount} assigned to you</span>
+      </div>
+    </div>
+  `).join('')}</div>`;
+}
+
 async function renderProjects(main) {
   main.innerHTML = `<h1>Projects</h1><p class="subtitle">Loading…</p>`;
   let projects;
@@ -844,19 +870,7 @@ async function renderProjects(main) {
     return;
   }
 
-  const cardsHtml = projects.length === 0
-    ? emptyStateHtml('No projects visible to you yet.')
-    : `<div class="grid">${projects.map(p => `
-        <div class="card project-card" data-project="${p.id}">
-          <h3>${escapeHtml(p.name)}</h3>
-          <p>${escapeHtml(p.description || 'No description')}</p>
-          <div class="meta">
-            <span class="badge stage-${escapeHtml(p.stage)}">${escapeHtml(p.stage)}</span>
-            <span>${p.taskCount} task${p.taskCount === 1 ? '' : 's'}</span>
-            <span>${p.myTaskCount} assigned to you</span>
-          </div>
-        </div>
-      `).join('')}</div>`;
+  if (state.projectSearch === undefined) state.projectSearch = '';
 
   const stageOptions = state.stages.map(s => `<option value="${escapeHtml(s)}">${escapeHtml(s)}</option>`).join('');
 
@@ -884,12 +898,33 @@ async function renderProjects(main) {
       </form>
     </div>
     ` : ''}
-    ${cardsHtml}
+    ${projects.length > 0 ? `
+    <div class="task-filter-bar">
+      <input type="search" class="task-filter-search" id="project-search-input" placeholder="Search projects…" value="${escapeHtml(state.projectSearch)}" />
+    </div>
+    ` : ''}
+    <div id="project-cards-root"></div>
   `;
 
-  main.querySelectorAll('[data-project]').forEach(el => {
-    el.addEventListener('click', () => setView('project', { projectId: Number(el.dataset.project) }));
-  });
+  const cardsRoot = main.querySelector('#project-cards-root');
+  function renderCards() {
+    const filtered = filterProjects(projects, state.projectSearch);
+    cardsRoot.innerHTML = filtered.length === 0
+      ? emptyStateHtml(projects.length === 0 ? 'No projects visible to you yet.' : 'No projects match your search.')
+      : projectCardsHtml(filtered);
+    cardsRoot.querySelectorAll('[data-project]').forEach(el => {
+      el.addEventListener('click', () => setView('project', { projectId: Number(el.dataset.project) }));
+    });
+  }
+  renderCards();
+
+  const searchInput = main.querySelector('#project-search-input');
+  if (searchInput) {
+    searchInput.addEventListener('input', () => {
+      state.projectSearch = searchInput.value;
+      renderCards();
+    });
+  }
 
   const newProjectForm = main.querySelector('#new-project-form');
   if (newProjectForm) {
