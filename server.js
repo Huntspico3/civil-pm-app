@@ -10,6 +10,7 @@ const auth = require('./auth');
 const fileValidation = require('./fileValidation');
 const taskImport = require('./taskImport');
 const weather = require('./weather');
+const rateLimit = require('express-rate-limit');
 
 const UPLOADS_DIR = path.join(db.DATA_DIR, 'uploads');
 fs.mkdirSync(UPLOADS_DIR, { recursive: true });
@@ -40,14 +41,43 @@ const importUpload = multer({
 });
 
 const app = express();
+
+// Render (like most PaaS hosts) puts the app behind a reverse proxy, so
+// every request's socket IP is the proxy's, not the real client's, unless
+// this is set — without it, the rate limiters below would see all traffic
+// as coming from one "IP" and lock everyone out together after a handful of
+// unrelated users' failed attempts. `1` means "trust exactly one proxy hop
+// in front of us", which matches Render's setup.
+app.set('trust proxy', 1);
+
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
+
+// Brute-force protection for the two password checks in the app (the shared
+// trial gate and real per-user login). Only failed attempts count toward
+// the limit (skipSuccessfulRequests) — a legitimate user who gets their own
+// password right is never affected, no matter how many other failed
+// attempts came from the same network. Keyed by IP by default, which is the
+// standard, simple approach for this; each endpoint has its own independent
+// counter so hitting one limit doesn't affect the other.
+function makeAuthLimiter(message) {
+  return rateLimit({
+    windowMs: 15 * 60 * 1000,
+    limit: 5,
+    standardHeaders: true,
+    legacyHeaders: false,
+    skipSuccessfulRequests: true,
+    message: { error: message }
+  });
+}
+const gateLimiter = makeAuthLimiter('Too many incorrect attempts. Please wait 15 minutes before trying again.');
+const loginLimiter = makeAuthLimiter('Too many failed login attempts. Please wait 15 minutes before trying again.');
 
 // --- shared trial gate: one shared password required before the individual login screen ---
 // Tokens are kept in memory only, so everyone is asked for the password again after a server restart.
 const gateTokens = new Set();
 
-app.post('/api/gate/verify', (req, res) => {
+app.post('/api/gate/verify', gateLimiter, (req, res) => {
   const configuredPassword = process.env.TRIAL_PASSWORD;
   if (!configuredPassword) {
     return res.status(500).json({ error: 'TRIAL_PASSWORD is not set on the server. Set it as an environment variable and restart the app.' });
@@ -95,7 +125,7 @@ app.use('/uploads', requireGateToken, (req, res, next) => {
   next();
 }, express.static(UPLOADS_DIR));
 
-app.post('/api/login', (req, res) => {
+app.post('/api/login', loginLimiter, (req, res) => {
   const { email: rawEmail, password } = req.body;
   const email = typeof rawEmail === 'string' ? rawEmail.trim().toLowerCase() : '';
   if (!email || !password) return res.status(400).json({ error: 'Email and password are required' });
