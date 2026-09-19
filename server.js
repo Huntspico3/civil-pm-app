@@ -1722,4 +1722,13 @@ app.use((err, req, res, next) => {
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`Civil PM app running at http://localhost:${PORT}`);
+  // Never logs the key itself — just whether this process actually received
+  // one, to tell apart "the env var never reached the process" (this line
+  // would say false) from "it did, but something after that is failing"
+  // (true, in which case check the actual error a call surfaces — the
+  // console.warn in the weekly-summary job, or the JSON body of a failed
+  // POST /api/tasks/interpret — for the real reason, e.g. an invalid key,
+  // no access to the model, or a billing/quota issue).
+  console.log(`ANTHROPIC_API_KEY present: ${!!process.env.ANTHROPIC_API_KEY}`);
+  console.log(`OPENAI_API_KEY present: ${!!process.env.OPENAI_API_KEY}`);
 });
