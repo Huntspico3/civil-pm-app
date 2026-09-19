@@ -145,4 +145,58 @@ Write this week's briefing now, following the rules exactly.`;
   return textBlock ? textBlock.text.trim() : '';
 }
 
-module.exports = { transcribeAudio, generateDraftReport, generateProjectSummary };
+// Translates a free-text task search (e.g. "overdue structural tasks on
+// Riverside Bridge") into the same structured filters the task list's own
+// filter bar already uses. Uses forced tool use so the response is always
+// well-formed JSON matching the schema below, rather than prose that would
+// need fragile parsing. The model is only ever given the exact candidate
+// names it's allowed to pick from (scoped by the caller to what the
+// requesting user can actually see) — server.js still re-validates every
+// name against those same lists before turning any of it into a real
+// filter, so a hallucinated name can never silently become a real one.
+async function interpretTaskQuery({ query, roles, statuses, projects, users }) {
+  if (!process.env.ANTHROPIC_API_KEY) {
+    throw new Error(
+      'Missing ANTHROPIC_API_KEY environment variable. Get an API key from https://console.anthropic.com/settings/keys ' +
+      'and set it as an environment variable named ANTHROPIC_API_KEY before restarting the server.'
+    );
+  }
+
+  const client = new Anthropic();
+
+  const tool = {
+    name: 'apply_task_filters',
+    description: "Translate the user's natural-language task search into structured filters. Use ONLY the exact names given in each field's list below — never invent a name that isn't in that list. If part of the query is about the task's subject matter and isn't covered by any field below, put it in keywordFallback instead of dropping it.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        projectName: {
+          type: ['string', 'null'],
+          description: projects.length ? `Exact project name from this list, or null if none is mentioned: ${projects.join(' | ')}` : 'Always null — no projects are available to filter by here.'
+        },
+        requiredRole: { type: ['string', 'null'], description: `Exact discipline/role from this list, or null: ${roles.join(' | ')}` },
+        status: { type: ['string', 'null'], description: `Exact status from this list, or null: ${statuses.join(' | ')}` },
+        overdue: { type: 'boolean', description: 'true only if the query specifically asks about overdue/late/past-due tasks' },
+        assigneeName: { type: ['string', 'null'], description: `Exact team member name from this list, or null: ${users.join(' | ')}` },
+        progressMin: { type: ['number', 'null'], description: 'Minimum progress percent 0-100 if the query gives a lower bound (e.g. "over 50% done"), else null' },
+        progressMax: { type: ['number', 'null'], description: 'Maximum progress percent 0-100 if the query gives an upper bound (e.g. "under 20% complete"), else null' },
+        keywordFallback: { type: ['string', 'null'], description: "Any remaining subject-matter text not covered above (e.g. a topic to search titles/descriptions for), else null. If nothing else in the query could be understood at all, put the whole original query here." }
+      },
+      required: ['overdue']
+    }
+  };
+
+  const response = await client.messages.create({
+    model: 'claude-opus-5',
+    max_tokens: 400,
+    tools: [tool],
+    tool_choice: { type: 'tool', name: 'apply_task_filters' },
+    messages: [{ role: 'user', content: query }]
+  });
+
+  const toolUse = response.content.find(b => b.type === 'tool_use');
+  if (!toolUse) throw new Error('The model did not return a structured filter');
+  return toolUse.input;
+}
+
+module.exports = { transcribeAudio, generateDraftReport, generateProjectSummary, interpretTaskQuery };

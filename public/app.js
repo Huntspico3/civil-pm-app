@@ -191,20 +191,66 @@ function defaultTaskFilters() {
   return {
     search: '', assigneeId: '', status: '', requiredRole: '',
     progressMin: '', progressMax: '', sortBy: '', sortDir: 'asc',
+    overdue: false, filterProjectId: '', filterProjectName: '',
     page: 1, pageSize: 50
   };
 }
 
 function hasActiveTaskFilters(filters) {
   return !!(filters.search || filters.assigneeId || filters.status || filters.requiredRole ||
-    filters.progressMin !== '' || filters.progressMax !== '' || filters.sortBy);
+    filters.progressMin !== '' || filters.progressMax !== '' || filters.sortBy ||
+    filters.overdue || filters.filterProjectId);
+}
+
+// Small removable "chips" summarizing whatever's currently filtering the
+// list, whichever way each one was set — a dropdown, the overdue checkbox,
+// or an AI-interpreted natural-language query. Every chip's × clears just
+// that one filter. `opts.lockedProjectId` (Task Board / a project's List
+// View, already scoped to one project) suppresses the project chip, since
+// project isn't a removable filter there — it's the page you're on.
+function activeFilterPillsHtml(filters, opts) {
+  const pills = [];
+  if (!opts.lockedProjectId && filters.filterProjectId) {
+    pills.push({ key: 'filterProjectId', label: `Project: ${filters.filterProjectName || filters.filterProjectId}` });
+  }
+  if (filters.search) pills.push({ key: 'search', label: `"${filters.search}"` });
+  if (filters.assigneeId === 'unassigned') {
+    pills.push({ key: 'assigneeId', label: 'Unassigned' });
+  } else if (filters.assigneeId) {
+    const u = state.users.find(u => String(u.id) === String(filters.assigneeId));
+    pills.push({ key: 'assigneeId', label: `Assignee: ${u ? u.name : filters.assigneeId}` });
+  }
+  if (filters.status) pills.push({ key: 'status', label: `Status: ${filters.status}` });
+  if (filters.requiredRole) pills.push({ key: 'requiredRole', label: `Role: ${filters.requiredRole}` });
+  if (filters.overdue) pills.push({ key: 'overdue', label: 'Overdue' });
+  if (filters.progressMin !== '' || filters.progressMax !== '') {
+    pills.push({ key: 'progress', label: `Progress: ${filters.progressMin !== '' ? filters.progressMin : 0}-${filters.progressMax !== '' ? filters.progressMax : 100}%` });
+  }
+  if (pills.length === 0) return '';
+  return `
+    <div class="filter-pills">
+      ${pills.map(p => `
+        <span class="filter-pill">
+          ${escapeHtml(p.label)}
+          <button type="button" class="filter-pill-remove" data-clear-filter="${p.key}" aria-label="Remove filter">&times;</button>
+        </span>
+      `).join('')}
+    </div>
+  `;
 }
 
 // `opts.showAssignee` hides the assignee filter on views that are already
 // scoped to one person (e.g. My Tasks doesn't need to filter by assignee).
+// `opts.lockedProjectId`, when set, tells the natural-language box not to
+// bother interpreting a project name — the list is already scoped to one.
 function taskFilterBarHtml(filters, opts = {}) {
   const showAssignee = opts.showAssignee !== false;
   return `
+    <div class="nl-search-bar">
+      <input type="text" class="nl-search-input" placeholder='Or ask in plain English — e.g. "overdue structural tasks"' />
+      <button type="button" class="btn small nl-search-btn">Ask</button>
+      <span class="hint nl-search-status"></span>
+    </div>
     <div class="task-filter-bar">
       <input type="search" class="task-filter-search" placeholder="Search tasks…" value="${escapeHtml(filters.search)}" />
       ${showAssignee ? `
@@ -227,6 +273,9 @@ function taskFilterBarHtml(filters, opts = {}) {
         <span>–</span>
         <input type="number" class="task-filter-progress-max" min="0" max="100" placeholder="Max %" value="${escapeHtml(filters.progressMax)}" />
       </div>
+      <label class="task-filter-overdue-label">
+        <input type="checkbox" class="task-filter-overdue" ${filters.overdue ? 'checked' : ''} /> Overdue only
+      </label>
       <select class="task-filter-sort">
         <option value="">Sort: default</option>
         <option value="dueDate" ${filters.sortBy === 'dueDate' ? 'selected' : ''}>Due date</option>
@@ -239,10 +288,11 @@ function taskFilterBarHtml(filters, opts = {}) {
       </select>
       ${hasActiveTaskFilters(filters) ? `<button type="button" class="btn small secondary task-filter-clear">Clear filters</button>` : ''}
     </div>
+    ${activeFilterPillsHtml(filters, opts)}
   `;
 }
 
-function bindTaskFilterBar(container, filters, onChange) {
+function bindTaskFilterBar(container, filters, onChange, opts = {}) {
   // 'change' (not 'input') for every one of these — they're selects, or
   // number fields that should only re-render on blur/Enter, not per
   // keystroke (which would rebuild the DOM mid-type and drop focus).
@@ -282,12 +332,81 @@ function bindTaskFilterBar(container, filters, onChange) {
   bind('.task-filter-progress-min', 'progressMin');
   bind('.task-filter-progress-max', 'progressMax');
 
+  const overdue = container.querySelector('.task-filter-overdue');
+  if (overdue) overdue.addEventListener('change', () => { filters.overdue = overdue.checked; filters.page = 1; onChange(); });
+
   const sortBy = container.querySelector('.task-filter-sort');
   if (sortBy) sortBy.addEventListener('change', () => { filters.sortBy = sortBy.value; onChange(); });
   const sortDir = container.querySelector('.task-filter-sort-dir');
   if (sortDir) sortDir.addEventListener('change', () => { filters.sortDir = sortDir.value; onChange(); });
   const clear = container.querySelector('.task-filter-clear');
   if (clear) clear.addEventListener('click', () => { Object.assign(filters, defaultTaskFilters()); onChange(); });
+
+  container.querySelectorAll('[data-clear-filter]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const key = btn.dataset.clearFilter;
+      if (key === 'progress') { filters.progressMin = ''; filters.progressMax = ''; }
+      else if (key === 'filterProjectId') { filters.filterProjectId = ''; filters.filterProjectName = ''; }
+      else if (key === 'overdue') { filters.overdue = false; }
+      else { filters[key] = ''; }
+      filters.page = 1;
+      onChange();
+    });
+  });
+
+  bindNlSearchBar(container, filters, opts, onChange);
+}
+
+// Submits the plain-English box to the AI query interpreter and maps the
+// result onto the same filters object every other control here shares —
+// each submission replaces the AI-controllable fields wholesale (a fresh
+// search rather than merging onto whatever was set before), matching how a
+// normal search box behaves. Any failure (a network hiccup, the model
+// being unavailable, an unrecognized query) is never shown as an error —
+// it just falls back to treating the raw text as a plain keyword search,
+// since this is meant to be a low-stakes, best-effort convenience on top of
+// the filters that already exist, not a feature that can block the page.
+function bindNlSearchBar(container, filters, opts, onChange) {
+  const input = container.querySelector('.nl-search-input');
+  const btn = container.querySelector('.nl-search-btn');
+  const statusEl = container.querySelector('.nl-search-status');
+  if (!input || !btn) return;
+
+  async function submit() {
+    const query = input.value.trim();
+    if (!query) return;
+    btn.disabled = true;
+    statusEl.textContent = 'Thinking…';
+    try {
+      const result = await api('/tasks/interpret', {
+        method: 'POST',
+        body: JSON.stringify({ query, projectId: opts.lockedProjectId || undefined })
+      });
+      const f = result.filters || {};
+      filters.filterProjectId = f.projectId !== undefined ? f.projectId : '';
+      filters.filterProjectName = result.matchedProjectName || '';
+      filters.requiredRole = f.requiredRole || '';
+      filters.status = f.status || '';
+      filters.overdue = !!f.overdue;
+      filters.assigneeId = f.assigneeId !== undefined ? f.assigneeId : '';
+      filters.progressMin = typeof f.progressMin === 'number' ? f.progressMin : '';
+      filters.progressMax = typeof f.progressMax === 'number' ? f.progressMax : '';
+      filters.search = f.search || '';
+    } catch (err) {
+      filters.search = query;
+    }
+    filters.page = 1;
+    statusEl.textContent = '';
+    btn.disabled = false;
+    // The re-rendered filter bar's NL box always starts blank (the template
+    // never echoes back the last query), so there's nothing left to clear.
+    onChange();
+  }
+
+  btn.addEventListener('click', submit);
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); submit(); }
+  });
 }
 
 // Builds the /api/tasks query string from a filters object plus any
@@ -301,6 +420,8 @@ function taskQueryParams(filters, extra = {}) {
   if (filters.requiredRole) params.set('requiredRole', filters.requiredRole);
   if (filters.progressMin !== '') params.set('progressMin', filters.progressMin);
   if (filters.progressMax !== '') params.set('progressMax', filters.progressMax);
+  if (filters.overdue) params.set('overdue', 'true');
+  if (filters.filterProjectId) params.set('projectId', filters.filterProjectId);
   if (filters.sortBy) { params.set('sortBy', filters.sortBy); params.set('sortDir', filters.sortDir || 'asc'); }
   params.set('page', filters.page || 1);
   params.set('pageSize', filters.pageSize || 50);
@@ -665,7 +786,10 @@ function workloadListHtml(workload) {
     <div class="workload-list">
       ${workload.map(w => `
         <div class="workload-row">
-          <div class="workload-name">${escapeHtml(w.name)} <span class="badge role-${escapeHtml(w.role)}">${escapeHtml(w.role)}</span></div>
+          <div class="workload-name">
+            <span class="workload-name-text" title="${escapeHtml(w.name)}">${escapeHtml(w.name)}</span>
+            <span class="badge role-${escapeHtml(w.role)}">${escapeHtml(w.role)}</span>
+          </div>
           <div class="workload-bar-track"><div class="workload-bar-fill" style="width:${(w.openTaskCount / max) * 100}%;"></div></div>
           <div class="workload-count">${w.openTaskCount}</div>
         </div>
@@ -1165,7 +1289,7 @@ async function renderProjectDetail(main, projectId) {
         <h2>Tasks</h2>
         ${isManager ? `<button type="button" class="btn small secondary" id="import-tasks-btn">Import Tasks</button>` : ''}
       </div>
-      ${taskFilterBarHtml(filters)}
+      ${taskFilterBarHtml(filters, { lockedProjectId: projectId })}
       <table>
         <thead><tr><th>Task</th><th>Role</th><th>Assignee</th><th>Status</th><th>Progress</th><th>Due</th></tr></thead>
         <tbody>${taskRows}</tbody>
@@ -1225,7 +1349,7 @@ async function renderProjectDetail(main, projectId) {
 
   main.querySelector('#back-to-projects').addEventListener('click', () => setView('projects'));
   bindProjectTabs(main, projectId);
-  bindTaskFilterBar(main, filters, () => renderProjectDetail(main, projectId));
+  bindTaskFilterBar(main, filters, () => renderProjectDetail(main, projectId), { lockedProjectId: projectId });
   bindPaginationBar(main, filters, () => renderProjectDetail(main, projectId));
   if (project.location) loadWeatherInto(main.querySelector('#project-weather'), projectId, {});
 
@@ -1473,7 +1597,7 @@ async function renderProjectBoard(main, projectId) {
     <h1>${escapeHtml(project.name)}</h1>
     <p class="subtitle">Board view. Drag a card between columns to update its status, or click a card for details.</p>
     ${projectTabsHtml('project-board')}
-    ${taskFilterBarHtml(filters)}
+    ${taskFilterBarHtml(filters, { lockedProjectId: projectId })}
     <div class="board">${columnsHtml}</div>
     ${tasks.length > 0 ? paginationBarHtml(page, totalPages, total, { loadMore: true, loadedCount: tasks.length }) : ''}
     <div id="task-modal-root"></div>
@@ -1481,7 +1605,7 @@ async function renderProjectBoard(main, projectId) {
 
   main.querySelector('#back-to-projects').addEventListener('click', () => setView('projects'));
   bindProjectTabs(main, projectId);
-  bindTaskFilterBar(main, filters, () => renderProjectBoard(main, projectId));
+  bindTaskFilterBar(main, filters, () => renderProjectBoard(main, projectId), { lockedProjectId: projectId });
   bindPaginationBar(main, filters, () => renderProjectBoard(main, projectId), { loadMore: true, pageSize: 150 });
 
   main.querySelectorAll('[data-task-card]').forEach(card => {

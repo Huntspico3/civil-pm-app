@@ -678,7 +678,7 @@ function enrichTask(t, data) {
 // instead of each view re-implementing its own slice of this logic.
 app.get('/api/tasks', requireAuth, (req, res) => {
   const data = db.load();
-  const { projectId, assigneeId, status, requiredRole, progressMin, progressMax, search, sortBy, sortDir } = req.query;
+  const { projectId, assigneeId, status, requiredRole, progressMin, progressMax, search, sortBy, sortDir, overdue } = req.query;
 
   let tasks = data.tasks.slice();
 
@@ -711,6 +711,11 @@ app.get('/api/tasks', requireAuth, (req, res) => {
   if (search && search.trim()) {
     const needle = search.trim().toLowerCase();
     tasks = tasks.filter(t => t.title.toLowerCase().includes(needle) || (t.description || '').toLowerCase().includes(needle));
+  }
+  if (overdue === 'true') {
+    const today = new Date().toISOString().slice(0, 10);
+    const doneStatus = data.taskStatuses[data.taskStatuses.length - 1];
+    tasks = tasks.filter(t => t.dueDate && t.dueDate < today && t.status !== doneStatus);
   }
 
   const enriched = tasks.map(t => enrichTask(t, data));
@@ -747,6 +752,69 @@ app.get('/api/tasks', requireAuth, (req, res) => {
     page: pageNum,
     pageSize: size,
     totalPages: Math.max(1, Math.ceil(total / size))
+  });
+});
+
+// Turns a plain-English task search into the same filters /api/tasks
+// already accepts. `projectId` in the request body means the caller is
+// already scoped to one project (Task Board / a project's List View) — in
+// that case the model isn't even offered a project list to match against,
+// and the response never carries a projectId, so it can't override that
+// scope. My Tasks (no fixed project) offers the user's own visible
+// projects as candidates instead. Every name the model returns is
+// re-resolved against these same lists here — a name that doesn't match
+// anything real (hallucinated or just wrong) is silently dropped rather
+// than trusted, and any failure at all falls back to null filters (the
+// caller then treats the raw query as a plain keyword search) instead of
+// erroring.
+app.post('/api/tasks/interpret', requireAuth, async (req, res) => {
+  const { query, projectId } = req.body;
+  if (!query || !String(query).trim()) return res.status(400).json({ error: 'A query is required' });
+
+  const data = db.load();
+  const locked = projectId !== undefined && projectId !== null && projectId !== '';
+  const candidateProjects = locked
+    ? []
+    : data.projects.filter(p => canSeeProject(req.user, p, data.tasks));
+
+  let interpretation;
+  try {
+    interpretation = await ai.interpretTaskQuery({
+      query: String(query).trim(),
+      roles: data.roles,
+      statuses: data.taskStatuses,
+      projects: candidateProjects.map(p => p.name),
+      users: data.users.map(u => u.name)
+    });
+  } catch (err) {
+    return res.status(502).json({ error: `Could not interpret that query: ${err.message}` });
+  }
+
+  const matchedProject = !locked && interpretation.projectName
+    ? candidateProjects.find(p => p.name.toLowerCase() === String(interpretation.projectName).toLowerCase())
+    : null;
+  const matchedRole = interpretation.requiredRole
+    ? data.roles.find(r => r.toLowerCase() === String(interpretation.requiredRole).toLowerCase())
+    : null;
+  const matchedStatus = interpretation.status
+    ? data.taskStatuses.find(s => s.toLowerCase() === String(interpretation.status).toLowerCase())
+    : null;
+  const matchedUser = interpretation.assigneeName
+    ? data.users.find(u => u.name.toLowerCase() === String(interpretation.assigneeName).toLowerCase())
+    : null;
+
+  res.json({
+    filters: {
+      projectId: matchedProject ? matchedProject.id : undefined,
+      requiredRole: matchedRole || undefined,
+      status: matchedStatus || undefined,
+      overdue: !!interpretation.overdue,
+      assigneeId: matchedUser ? matchedUser.id : undefined,
+      progressMin: typeof interpretation.progressMin === 'number' ? interpretation.progressMin : undefined,
+      progressMax: typeof interpretation.progressMax === 'number' ? interpretation.progressMax : undefined,
+      search: interpretation.keywordFallback || undefined
+    },
+    matchedProjectName: matchedProject ? matchedProject.name : null
   });
 });
 

@@ -685,6 +685,48 @@ body.gantt-dragging { user-select: none; }
 }
 .task-filter-progress input { width: 4.5em; }
 .task-filter-bar .task-filter-clear { flex: 0 0 auto; }
+.task-filter-overdue-label { display: flex; align-items: center; gap: 0.35rem; font-size: 0.82rem; color: var(--text-muted); white-space: nowrap; }
+.task-filter-overdue-label input { width: auto; padding: 0; }
+
+/* Plain-English task search — sits above the regular filter bar it fills
+   in, so it's visually "another way to set the same filters" rather than a
+   separate feature. */
+.nl-search-bar { display: flex; align-items: center; gap: 0.55rem; margin-top: 0.9rem; }
+.nl-search-input {
+  flex: 1 1 260px;
+  min-width: 160px;
+  padding: 0.4rem 0.55rem;
+  font-size: 0.82rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--card);
+  color: var(--text);
+}
+.nl-search-status { font-size: 0.8rem; color: var(--text-muted); }
+
+.filter-pills { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-top: 0.6rem; }
+.filter-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.25rem 0.3rem 0.25rem 0.65rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--primary);
+  background: var(--primary-light);
+  border-radius: 999px;
+}
+.filter-pill-remove {
+  border: none;
+  background: none;
+  color: inherit;
+  font-size: 0.95rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0.1rem 0.3rem;
+  border-radius: 50%;
+}
+.filter-pill-remove:hover { background: rgba(255, 255, 255, 0.6); }
 
 .task-row-clickable { cursor: pointer; }
 .task-row-clickable:hover { background: var(--primary-light); }
@@ -782,12 +824,30 @@ body.gantt-dragging { user-select: none; }
 .analytics-legend-item { display: flex; align-items: center; gap: 0.35rem; }
 .analytics-legend-dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
 
-.workload-list { display: flex; flex-direction: column; gap: 0.55rem; }
-.workload-row { display: grid; grid-template-columns: 1fr 2fr auto; align-items: center; gap: 0.6rem; font-size: 0.85rem; }
-.workload-name { display: flex; align-items: center; gap: 0.4rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.workload-bar-track { height: 10px; border-radius: 999px; background: var(--bg); border: 1px solid var(--border); overflow: hidden; }
-.workload-bar-fill { height: 100%; border-radius: 999px; background: var(--primary); }
-.workload-count { font-weight: 700; text-align: right; min-width: 1.4em; }
+.workload-list { display: flex; flex-direction: column; gap: 0.55rem; max-width: 100%; }
+/* minmax(0, ...) — not plain 1fr/2fr — is what actually lets these tracks
+   shrink below their content's natural width; without it, a long name or a
+   wide badge pushes the row past the card's edge instead of truncating. */
+.workload-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr) auto; align-items: center; gap: 0.6rem; font-size: 0.85rem; max-width: 100%; }
+.workload-name { display: flex; align-items: center; gap: 0.4rem; min-width: 0; overflow: hidden; }
+.workload-name-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.workload-name .badge { flex-shrink: 0; }
+.workload-bar-track { height: 10px; border-radius: 999px; background: var(--bg); border: 1px solid var(--border); overflow: hidden; min-width: 0; }
+.workload-bar-fill { height: 100%; border-radius: 999px; background: var(--primary); max-width: 100%; }
+.workload-count { font-weight: 700; text-align: right; min-width: 1.4em; white-space: nowrap; }
+
+@media (max-width: 480px) {
+  /* Too narrow for three side-by-side columns without squeezing something —
+     stack name+badge above bar+count instead of letting either overflow. */
+  .workload-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas: "name name" "bar count";
+    row-gap: 0.3rem;
+  }
+  .workload-name { grid-area: name; }
+  .workload-bar-track { grid-area: bar; }
+  .workload-count { grid-area: count; }
+}
 
 .analytics-big-number { font-size: 2.1rem; font-weight: 800; letter-spacing: -0.02em; line-height: 1; }
 .analytics-big-number-unit { font-size: 0.85rem; font-weight: 600; color: var(--text-muted); margin-left: 0.35rem; }
