@@ -802,6 +802,88 @@ app.get('/api/dashboard-stats', requireAuth, (req, res) => {
   });
 });
 
+// --- dashboard analytics (admins & project managers only) ---
+// Three simple, self-contained rollups: projects by on-track/at-risk/behind
+// status, team workload (open task count per person), and average RFI
+// response time with a rough trend. An admin sees these org-wide; a
+// non-admin manager sees the same three, scoped to just the project(s) they
+// created — never another manager's data. A regular team member gets 403;
+// the dashboard simply doesn't request this for them (same isManager()
+// check the client already has via /api/me).
+app.get('/api/analytics', requireAuth, (req, res) => {
+  const data = db.load();
+  if (!isManager(req.user, data)) {
+    return res.status(403).json({ error: 'Admin or project manager access required' });
+  }
+
+  const scopedProjects = req.user.isAdmin ? data.projects : data.projects.filter(p => p.createdBy === req.user.id);
+  const scopedProjectIds = new Set(scopedProjects.map(p => p.id));
+  const doneStatus = data.taskStatuses[data.taskStatuses.length - 1];
+
+  // 1. Projects by status — progress % vs. how much of the timeline has
+  // elapsed. Comfortably ahead-or-on-schedule (within 10 points) is "On
+  // Track"; a 10-25 point gap is "At Risk"; more than 25 points behind is
+  // "Behind". Simple fixed thresholds, not real critical-path scheduling.
+  const now = Date.now();
+  const projectsByStatus = { onTrack: 0, atRisk: 0, behind: 0 };
+  scopedProjects.forEach(p => {
+    const progress = withComputedProgress(p, data).progress;
+    const startMs = new Date(p.startDate + 'T00:00:00').getTime();
+    const endMs = new Date(p.endDate + 'T00:00:00').getTime();
+    const elapsedPct = endMs > startMs ? Math.max(0, Math.min(100, ((now - startMs) / (endMs - startMs)) * 100)) : 100;
+    const delta = progress - elapsedPct;
+    if (delta >= -10) projectsByStatus.onTrack++;
+    else if (delta >= -25) projectsByStatus.atRisk++;
+    else projectsByStatus.behind++;
+  });
+
+  // 2. Team workload — open (not-Done) task count per person, in scope.
+  // Includes everyone, even people with zero, so "too little on their
+  // plate" is visible too, not just "too much".
+  const scopedOpenTasks = data.tasks.filter(t => scopedProjectIds.has(t.projectId) && t.status !== doneStatus);
+  const workload = data.users
+    .map(u => ({
+      userId: u.id,
+      name: u.name,
+      role: u.role,
+      openTaskCount: scopedOpenTasks.filter(t => t.assigneeId === u.id).length
+    }))
+    .sort((a, b) => b.openTaskCount - a.openTaskCount);
+
+  // 3. Average RFI response time, plus a rough trend (last 30 days vs. the
+  // 30 days before that) when there's enough data on both sides to compare.
+  const scopedAnsweredRfis = data.rfis.filter(r => scopedProjectIds.has(r.projectId) && r.answer && r.answeredAt);
+  const responseDays = (r) => (new Date(r.answeredAt).getTime() - new Date(r.createdAt).getTime()) / (24 * 60 * 60 * 1000);
+  const average = (list) => list.reduce((sum, r) => sum + responseDays(r), 0) / list.length;
+
+  const averageDays = scopedAnsweredRfis.length > 0 ? average(scopedAnsweredRfis) : null;
+
+  const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
+  const currentPeriod = scopedAnsweredRfis.filter(r => now - new Date(r.answeredAt).getTime() <= THIRTY_DAYS_MS);
+  const previousPeriod = scopedAnsweredRfis.filter(r => {
+    const age = now - new Date(r.answeredAt).getTime();
+    return age > THIRTY_DAYS_MS && age <= THIRTY_DAYS_MS * 2;
+  });
+
+  let trend = null;
+  if (currentPeriod.length > 0 && previousPeriod.length > 0) {
+    const currentAvg = average(currentPeriod);
+    const previousAvg = average(previousPeriod);
+    const deltaDays = currentAvg - previousAvg;
+    trend = {
+      deltaDays,
+      direction: Math.abs(deltaDays) < 0.05 ? 'flat' : (deltaDays < 0 ? 'faster' : 'slower')
+    };
+  }
+
+  res.json({
+    scope: req.user.isAdmin ? 'org' : 'managed',
+    projectsByStatus: { ...projectsByStatus, total: scopedProjects.length },
+    workload,
+    rfiResponseTime: { averageDays, answeredCount: scopedAnsweredRfis.length, trend }
+  });
+});
+
 // --- my tasks (a user's tasks across every project; admins can view any team member's) ---
 app.get('/api/my-tasks', requireAuth, (req, res) => {
   const data = db.load();

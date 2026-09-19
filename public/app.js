@@ -633,12 +633,81 @@ async function renderExternalContacts(main) {
 
 // ---------------- DASHBOARD ----------------
 
+// ---------------- DASHBOARD ANALYTICS (admins & project managers) ----------------
+
+function projectStatusBarHtml(byStatus) {
+  if (!byStatus.total) return emptyStateHtml('No projects to analyze yet.');
+  const segments = [
+    { count: byStatus.onTrack, label: 'On Track', color: 'var(--success)' },
+    { count: byStatus.atRisk, label: 'At Risk', color: 'var(--warning)' },
+    { count: byStatus.behind, label: 'Behind', color: 'var(--danger)' }
+  ];
+  return `
+    <div class="analytics-status-bar">
+      ${segments.map(s => s.count > 0 ? `<div style="width:${(s.count / byStatus.total) * 100}%; background:${s.color};" title="${s.label}: ${s.count}"></div>` : '').join('')}
+    </div>
+    <div class="analytics-legend">
+      ${segments.map(s => `
+        <div class="analytics-legend-item">
+          <span class="analytics-legend-dot" style="background:${s.color};"></span>
+          <span>${s.label}</span>
+          <strong>${s.count}</strong>
+        </div>
+      `).join('')}
+    </div>
+  `;
+}
+
+function workloadListHtml(workload) {
+  if (workload.length === 0) return emptyStateHtml('No team members yet.');
+  const max = Math.max(1, ...workload.map(w => w.openTaskCount));
+  return `
+    <div class="workload-list">
+      ${workload.map(w => `
+        <div class="workload-row">
+          <div class="workload-name">${escapeHtml(w.name)} <span class="badge role-${escapeHtml(w.role)}">${escapeHtml(w.role)}</span></div>
+          <div class="workload-bar-track"><div class="workload-bar-fill" style="width:${(w.openTaskCount / max) * 100}%;"></div></div>
+          <div class="workload-count">${w.openTaskCount}</div>
+        </div>
+      `).join('')}
+    </div>
+  `;
+}
+
+function rfiResponseTimeHtml(rt) {
+  if (rt.averageDays == null) return emptyStateHtml('No answered RFIs yet.');
+
+  let trendHtml = `<p class="hint">Not enough recent data to show a trend.</p>`;
+  if (rt.trend) {
+    if (rt.trend.direction === 'flat') {
+      trendHtml = `<p class="hint">About the same as the previous 30 days.</p>`;
+    } else {
+      const isGood = rt.trend.direction === 'faster';
+      const days = Math.abs(rt.trend.deltaDays).toFixed(1);
+      trendHtml = `<p class="${isGood ? 'trend-good' : 'trend-bad'}">${isGood ? '&#9660;' : '&#9650;'} ${days} day${days === '1.0' ? '' : 's'} ${rt.trend.direction} than the previous 30 days</p>`;
+    }
+  }
+
+  return `
+    <div class="analytics-big-number">${rt.averageDays.toFixed(1)}<span class="analytics-big-number-unit">days</span></div>
+    <p class="hint">Across ${rt.answeredCount} answered RFI${rt.answeredCount === 1 ? '' : 's'}.</p>
+    ${trendHtml}
+  `;
+}
+
 async function renderDashboard(main) {
   main.innerHTML = `<h1>Dashboard</h1><p class="subtitle">Loading…</p>`;
-  let tasks, stats;
+  let tasks, stats, analytics = null;
   try {
     tasks = await api('/dashboard');
     stats = await api('/dashboard-stats');
+    if (state.me.isAdmin || state.me.isManager) {
+      try {
+        analytics = await api('/analytics');
+      } catch (e) {
+        analytics = null; // non-fatal — the rest of the dashboard still works without it
+      }
+    }
   } catch (e) {
     main.innerHTML = `<h1>Dashboard</h1><p class="error-text">${escapeHtml(e.message)}</p>`;
     return;
@@ -700,10 +769,30 @@ async function renderDashboard(main) {
         `;
       }).join('');
 
+  const analyticsHtml = analytics ? `
+    <h2>Analytics</h2>
+    <div class="analytics-grid">
+      <div class="card">
+        <h3>Projects by Status</h3>
+        ${projectStatusBarHtml(analytics.projectsByStatus)}
+      </div>
+      <div class="card">
+        <h3>Team Workload</h3>
+        <p class="hint">Open tasks per person${analytics.scope === 'managed' ? ' (your projects)' : ''}.</p>
+        ${workloadListHtml(analytics.workload)}
+      </div>
+      <div class="card">
+        <h3>Average RFI Response Time</h3>
+        ${rfiResponseTimeHtml(analytics.rfiResponseTime)}
+      </div>
+    </div>
+  ` : '';
+
   main.innerHTML = `
     <h1>Dashboard</h1>
     <p class="subtitle">${state.me.isAdmin ? 'All projects and tasks across the org.' : 'Tasks assigned to you (and any projects you created).'}</p>
     ${statsHtml}
+    ${analyticsHtml}
     <h2>Task Summary</h2>
     <div class="dash-toggle">
       <button class="btn ${groupBy === 'project' ? '' : 'secondary'}" data-group="project">Group by Project</button>
