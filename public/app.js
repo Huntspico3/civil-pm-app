@@ -393,6 +393,11 @@ function bindNlSearchBar(container, filters, opts, onChange) {
       filters.progressMax = typeof f.progressMax === 'number' ? f.progressMax : '';
       filters.search = f.search || '';
     } catch (err) {
+      // Falls back to a plain keyword search either way (per the spec, this
+      // should never surface as a visible error) — but the failure itself
+      // is still worth a console trace, since a silent catch here was making
+      // this impossible to diagnose from the outside.
+      console.error('Natural-language task search failed, falling back to keyword search:', err);
       filters.search = query;
     }
     filters.page = 1;
