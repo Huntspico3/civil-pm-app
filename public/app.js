@@ -795,8 +795,10 @@ function workloadListHtml(workload) {
             <span class="workload-name-text" title="${escapeHtml(w.name)}">${escapeHtml(w.name)}</span>
             <span class="badge role-${escapeHtml(w.role)}">${escapeHtml(w.role)}</span>
           </div>
-          <div class="workload-bar-track"><div class="workload-bar-fill" style="width:${(w.openTaskCount / max) * 100}%;"></div></div>
-          <div class="workload-count">${w.openTaskCount}</div>
+          <div class="workload-bar-group">
+            <div class="workload-bar-track"><div class="workload-bar-fill" style="width:${(w.openTaskCount / max) * 100}%;"></div></div>
+            <div class="workload-count">${w.openTaskCount}</div>
+          </div>
         </div>
       `).join('')}
     </div>

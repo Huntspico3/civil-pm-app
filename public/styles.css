@@ -825,29 +825,21 @@ body.gantt-dragging { user-select: none; }
 .analytics-legend-dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
 
 .workload-list { display: flex; flex-direction: column; gap: 0.55rem; max-width: 100%; }
-/* minmax(0, ...) — not plain 1fr/2fr — is what actually lets these tracks
-   shrink below their content's natural width; without it, a long name or a
-   wide badge pushes the row past the card's edge instead of truncating. */
-.workload-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr) auto; align-items: center; gap: 0.6rem; font-size: 0.85rem; max-width: 100%; }
-.workload-name { display: flex; align-items: center; gap: 0.4rem; min-width: 0; overflow: hidden; }
+/* Flexbox with wrap, not a fixed grid — this card's own width varies a lot
+   (it shares a row with other analytics cards, so it can be narrow even on
+   a wide screen), and a media query keyed to viewport width can't react to
+   that. Wrapping instead means the bar+count group naturally drops to its
+   own line whenever there isn't room beside the name, at whatever width
+   this card actually ends up — and wrapped flex items are never rendered
+   on top of each other, so the two can't visually collide either way. */
+.workload-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem 0.6rem; font-size: 0.85rem; max-width: 100%; }
+.workload-name { display: flex; align-items: center; gap: 0.4rem; min-width: 0; overflow: hidden; flex: 1 1 120px; }
 .workload-name-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .workload-name .badge { flex-shrink: 0; }
-.workload-bar-track { height: 10px; border-radius: 999px; background: var(--bg); border: 1px solid var(--border); overflow: hidden; min-width: 0; }
+.workload-bar-group { display: flex; align-items: center; gap: 0.5rem; flex: 1 1 110px; min-width: 90px; }
+.workload-bar-track { flex: 1 1 auto; min-width: 40px; height: 10px; border-radius: 999px; background: var(--bg); border: 1px solid var(--border); overflow: hidden; }
 .workload-bar-fill { height: 100%; border-radius: 999px; background: var(--primary); max-width: 100%; }
-.workload-count { font-weight: 700; text-align: right; min-width: 1.4em; white-space: nowrap; }
-
-@media (max-width: 480px) {
-  /* Too narrow for three side-by-side columns without squeezing something —
-     stack name+badge above bar+count instead of letting either overflow. */
-  .workload-row {
-    grid-template-columns: minmax(0, 1fr) auto;
-    grid-template-areas: "name name" "bar count";
-    row-gap: 0.3rem;
-  }
-  .workload-name { grid-area: name; }
-  .workload-bar-track { grid-area: bar; }
-  .workload-count { grid-area: count; }
-}
+.workload-count { flex: 0 0 auto; font-weight: 700; text-align: right; min-width: 1.4em; white-space: nowrap; }
 
 .analytics-big-number { font-size: 2.1rem; font-weight: 800; letter-spacing: -0.02em; line-height: 1; }
 .analytics-big-number-unit { font-size: 0.85rem; font-weight: 600; color: var(--text-muted); margin-left: 0.35rem; }
