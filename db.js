@@ -47,7 +47,7 @@ const DEFAULT_USER_PASSWORDS = {
 
 function seed() {
   return {
-    nextIds: { user: 6, project: 3, task: 8, externalContact: 5, report: 1, rfi: 4, document: 1, snag: 1 },
+    nextIds: { user: 6, project: 3, task: 8, externalContact: 5, report: 1, rfi: 4, document: 1, snag: 1, risk: 1, decision: 1 },
     roles: DEFAULT_ROLES.slice(),
     stages: DEFAULT_STAGES.slice(),
     taskStatuses: DEFAULT_TASK_STATUSES.slice(),
@@ -152,7 +152,9 @@ function seed() {
       }
     ],
     documents: [],
-    snags: []
+    snags: [],
+    risks: [],
+    decisions: []
   };
 }
 
@@ -171,7 +173,9 @@ const COLLECTIONS = {
   reports: 'report',
   rfis: 'rfi',
   documents: 'document',
-  snags: 'snag'
+  snags: 'snag',
+  risks: 'risk',
+  decisions: 'decision'
 };
 
 function backfillSchema(data) {

@@ -1648,6 +1648,95 @@ app.patch('/api/snags/:id', requireAuth, (req, res) => {
   res.json(enrichSnag(snag, data));
 });
 
+// --- risk register & decision register (per project) ---
+// Deliberately the simplest of the project sub-registers in this app: no
+// pinned photos, no status history, no manager-only gate on creation —
+// anyone who can see the project can add or edit an entry in either
+// register, same as the ask. One shared implementation drives both, since
+// a risk and a decision are the same shape (a description, who raised it
+// and when, a status) plus one extra free-text field decisions have.
+const REGISTER_TYPES = {
+  risks: { collection: 'risks', idKind: 'risk', statuses: ['Open', 'Closed'], hasDecisionField: false, label: 'Risk' },
+  decisions: { collection: 'decisions', idKind: 'decision', statuses: ['Pending', 'Decided'], hasDecisionField: true, label: 'Decision' }
+};
+
+function enrichRegisterEntry(entry, data) {
+  return { ...entry, raisedByUser: data.users.find(u => u.id === entry.raisedBy) || null };
+}
+
+function registerRoutes(pathSegment) {
+  const config = REGISTER_TYPES[pathSegment];
+
+  app.get(`/api/projects/:id/${pathSegment}`, requireAuth, (req, res) => {
+    const data = db.load();
+    const project = data.projects.find(p => p.id === Number(req.params.id));
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    if (!canSeeProject(req.user, project, data.tasks)) return res.status(403).json({ error: 'Not visible to you' });
+
+    const entries = data[config.collection]
+      .filter(e => e.projectId === project.id)
+      .sort((a, b) => b.dateRaised.localeCompare(a.dateRaised) || b.id - a.id)
+      .map(e => enrichRegisterEntry(e, data));
+    res.json(entries);
+  });
+
+  app.post(`/api/projects/:id/${pathSegment}`, requireAuth, (req, res) => {
+    const data = db.load();
+    const project = data.projects.find(p => p.id === Number(req.params.id));
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    if (!canSeeProject(req.user, project, data.tasks)) return res.status(403).json({ error: 'Not visible to you' });
+
+    const description = (req.body.description || '').trim();
+    if (!description) return res.status(400).json({ error: `A short description is required for a ${config.label.toLowerCase()}` });
+    const dateRaised = req.body.dateRaised;
+    if (!dateRaised || !DATE_RE.test(dateRaised)) {
+      return res.status(400).json({ error: 'Date raised is required, in YYYY-MM-DD format' });
+    }
+
+    const entry = {
+      id: db.nextId(config.idKind),
+      projectId: project.id,
+      description,
+      dateRaised,
+      raisedBy: req.user.id,
+      status: config.statuses[0],
+      createdAt: new Date().toISOString()
+    };
+    if (config.hasDecisionField) entry.decision = '';
+    data[config.collection].push(entry);
+    db.save(data);
+    res.status(201).json(enrichRegisterEntry(entry, data));
+  });
+
+  app.patch(`/api/${pathSegment}/:id`, requireAuth, (req, res) => {
+    const data = db.load();
+    const entry = data[config.collection].find(e => e.id === Number(req.params.id));
+    if (!entry) return res.status(404).json({ error: `${config.label} not found` });
+    const project = data.projects.find(p => p.id === entry.projectId);
+    if (!project || !canSeeProject(req.user, project, data.tasks)) return res.status(403).json({ error: 'Not visible to you' });
+
+    const { description, status, decision } = req.body;
+    if (description !== undefined) {
+      const trimmed = String(description).trim();
+      if (!trimmed) return res.status(400).json({ error: 'Description cannot be empty' });
+      entry.description = trimmed;
+    }
+    if (status !== undefined) {
+      if (!config.statuses.includes(status)) return res.status(400).json({ error: 'Invalid status' });
+      entry.status = status;
+    }
+    if (config.hasDecisionField && decision !== undefined) {
+      entry.decision = String(decision).trim();
+    }
+
+    db.save(data);
+    res.json(enrichRegisterEntry(entry, data));
+  });
+}
+
+registerRoutes('risks');
+registerRoutes('decisions');
+
 // --- portfolio timeline (org-wide, visible to every logged-in user) ---
 app.get('/api/portfolio', requireAuth, (req, res) => {
   const data = db.load();

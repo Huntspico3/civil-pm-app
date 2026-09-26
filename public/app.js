@@ -6,7 +6,7 @@ const state = {
   stages: [],
   taskStatuses: [],
   externalContactCategories: [],
-  view: 'dashboard', // 'dashboard' | 'projects' | 'project' | 'project-board' | 'project-rfis' | 'project-documents' | 'project-snags' | 'contacts' | 'team' | 'settings' | 'portfolio' | 'my-tasks' | 'offsite-reports'
+  view: 'dashboard', // 'dashboard' | 'projects' | 'project' | 'project-board' | 'project-rfis' | 'project-documents' | 'project-snags' | 'project-risks' | 'project-decisions' | 'contacts' | 'team' | 'settings' | 'portfolio' | 'my-tasks' | 'offsite-reports'
   activeProjectId: null,
   dashboardGroupBy: 'project',
   myTasksUserId: null,
@@ -636,7 +636,7 @@ function renderShell() {
   if (state.me.isAdmin) nav.push({ key: 'settings', label: 'Settings' });
 
   const navHtml = nav.map(n => `
-    <button data-nav="${n.key}" class="${state.view === n.key || (n.key === 'projects' && ['project', 'project-board', 'project-rfis', 'project-documents', 'project-snags'].includes(state.view)) ? 'active' : ''}">
+    <button data-nav="${n.key}" class="${state.view === n.key || (n.key === 'projects' && ['project', 'project-board', 'project-rfis', 'project-documents', 'project-snags', 'project-risks', 'project-decisions'].includes(state.view)) ? 'active' : ''}">
       ${NAV_ICONS[n.key] || ''}
       <span class="nav-label">${n.label}</span>
       ${n.key === 'my-tasks' && state.myOpenRfiCount > 0 ? `<span class="nav-badge" title="Open RFIs waiting on you">${state.myOpenRfiCount}</span>` : ''}
@@ -678,6 +678,8 @@ function bindShell() {
   else if (state.view === 'project-rfis') renderProjectRfis(main, state.activeProjectId);
   else if (state.view === 'project-documents') renderProjectDocuments(main, state.activeProjectId);
   else if (state.view === 'project-snags') renderProjectSnags(main, state.activeProjectId);
+  else if (state.view === 'project-risks') renderProjectRegister(main, state.activeProjectId, 'risks');
+  else if (state.view === 'project-decisions') renderProjectRegister(main, state.activeProjectId, 'decisions');
   else if (state.view === 'contacts') renderContacts(main);
   else if (state.view === 'external-contacts') renderExternalContacts(main);
   else if (state.view === 'team') renderTeam(main);
@@ -1181,7 +1183,9 @@ function projectTabsHtml(active) {
     { key: 'project-board', label: 'Board View' },
     { key: 'project-rfis', label: 'RFIs' },
     { key: 'project-documents', label: 'Documents' },
-    { key: 'project-snags', label: 'Snags' }
+    { key: 'project-snags', label: 'Snags' },
+    { key: 'project-risks', label: 'Risk Register' },
+    { key: 'project-decisions', label: 'Decision Register' }
   ];
   return `<div class="dash-toggle">${tabs.map(t => `
     <button class="btn ${t.key === active ? '' : 'secondary'}" data-project-tab="${t.key}">${t.label}</button>
@@ -2501,6 +2505,162 @@ async function showSnagDetailModal(main, projectId, snag, isManager, onUpdated) 
       }
     });
   }
+}
+
+// ---------------- PROJECT REGISTERS (Risk / Decision) ----------------
+// One shared implementation drives both simple project-scoped registers —
+// a risk and a decision are the same shape (description, who raised it and
+// when, a status) plus one extra free-text field decisions have. Unlike
+// snags/documents, there's no manager-only gate on creation here — anyone
+// who can already see the project can add or edit an entry in either.
+
+const REGISTER_CONFIG = {
+  risks: { tabKey: 'project-risks', heading: 'Risk Register', itemLabel: 'Risk', statuses: ['Open', 'Closed'], hasDecisionField: false },
+  decisions: { tabKey: 'project-decisions', heading: 'Decision Register', itemLabel: 'Decision', statuses: ['Pending', 'Decided'], hasDecisionField: true }
+};
+
+async function renderProjectRegister(main, projectId, kind) {
+  const config = REGISTER_CONFIG[kind];
+  main.innerHTML = `<p class="subtitle">Loading…</p>`;
+  let project, entries;
+  try {
+    project = await api('/projects/' + projectId);
+    entries = await api('/projects/' + projectId + '/' + kind);
+  } catch (e) {
+    main.innerHTML = `<button class="back-link" id="back-to-projects">&larr; Back to Projects</button><p class="error-text">${escapeHtml(e.message)}</p>`;
+    main.querySelector('#back-to-projects').addEventListener('click', () => setView('projects'));
+    return;
+  }
+
+  const colCount = config.hasDecisionField ? 6 : 5;
+  const rowsHtml = entries.length === 0
+    ? emptyStateRowHtml(`No ${config.itemLabel.toLowerCase()}s logged yet.`, colCount)
+    : entries.map(e => `
+        <tr>
+          <td>${escapeHtml(e.description)}</td>
+          <td>${formatDate(e.dateRaised)}</td>
+          <td>${e.raisedByUser ? escapeHtml(e.raisedByUser.name) : 'Unknown'}</td>
+          <td>
+            <select class="select-inline ${escapeHtml(statusClass(e.status))}" data-register-status="${e.id}">
+              ${config.statuses.map(s => `<option value="${escapeHtml(s)}" ${s === e.status ? 'selected' : ''}>${escapeHtml(s)}</option>`).join('')}
+            </select>
+          </td>
+          ${config.hasDecisionField ? `<td>${e.decision ? escapeHtml(e.decision) : '<span class="hint">—</span>'}</td>` : ''}
+          <td><button type="button" class="btn small secondary" data-register-edit="${e.id}">Edit</button></td>
+        </tr>
+      `).join('');
+
+  main.innerHTML = `
+    <button class="back-link" id="back-to-projects">&larr; Back to Projects</button>
+    <h1>${escapeHtml(project.name)}</h1>
+    <p class="subtitle">${escapeHtml(config.heading)} for this project.</p>
+    ${projectTabsHtml(config.tabKey)}
+
+    <div class="card">
+      <h2>${escapeHtml(config.heading)}</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Description</th><th>Date Raised</th><th>Raised By</th><th>Status</th>
+            ${config.hasDecisionField ? '<th>Decision</th>' : ''}
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>${rowsHtml}</tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <h2>New ${config.itemLabel}</h2>
+      <form id="register-add-form">
+        <div><label>Description</label><textarea name="description" required placeholder="Short description"></textarea></div>
+        <div><label>Date Raised</label><input name="dateRaised" type="date" required value="${new Date().toISOString().slice(0, 10)}" /></div>
+        <div id="register-form-error" class="error-text"></div>
+        <button class="btn" type="submit">Add ${config.itemLabel}</button>
+      </form>
+    </div>
+    <div id="register-modal-root"></div>
+  `;
+
+  main.querySelector('#back-to-projects').addEventListener('click', () => setView('projects'));
+  bindProjectTabs(main, projectId);
+
+  main.querySelectorAll('[data-register-status]').forEach(select => {
+    select.addEventListener('change', async () => {
+      try {
+        await api('/' + kind + '/' + select.dataset.registerStatus, { method: 'PATCH', body: JSON.stringify({ status: select.value }) });
+        renderProjectRegister(main, projectId, kind);
+      } catch (err) {
+        alert(err.message);
+        renderProjectRegister(main, projectId, kind);
+      }
+    });
+  });
+
+  main.querySelectorAll('[data-register-edit]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const entry = entries.find(e => e.id === Number(btn.dataset.registerEdit));
+      if (entry) showRegisterEditModal(main, projectId, kind, entry, () => renderProjectRegister(main, projectId, kind));
+    });
+  });
+
+  main.querySelector('#register-add-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const form = e.target;
+    const errBox = form.querySelector('#register-form-error');
+    errBox.textContent = '';
+    try {
+      await api('/projects/' + projectId + '/' + kind, {
+        method: 'POST',
+        body: JSON.stringify({ description: form.description.value, dateRaised: form.dateRaised.value })
+      });
+      renderProjectRegister(main, projectId, kind);
+    } catch (err) {
+      errBox.textContent = err.message;
+    }
+  });
+}
+
+function showRegisterEditModal(main, projectId, kind, entry, onUpdated) {
+  const config = REGISTER_CONFIG[kind];
+  const modalRoot = main.querySelector('#register-modal-root');
+  if (!modalRoot) return;
+
+  modalRoot.innerHTML = `
+    <div class="modal-overlay" id="register-modal-overlay">
+      <div class="modal-card">
+        <button class="modal-close" id="register-modal-close">&times;</button>
+        <h2>Edit ${config.itemLabel}</h2>
+        <form id="register-edit-form">
+          <div><label>Description</label><textarea name="description" required>${escapeHtml(entry.description)}</textarea></div>
+          ${config.hasDecisionField ? `<div><label>Decision</label><textarea name="decision" placeholder="What was decided?">${escapeHtml(entry.decision || '')}</textarea></div>` : ''}
+          <div id="register-modal-error" class="error-text"></div>
+          <button class="btn" type="submit">Save</button>
+        </form>
+      </div>
+    </div>
+  `;
+
+  const overlay = document.getElementById('register-modal-overlay');
+  const close = () => { modalRoot.innerHTML = ''; };
+  document.getElementById('register-modal-close').addEventListener('click', close);
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+
+  document.getElementById('register-edit-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const form = e.target;
+    const errBox = document.getElementById('register-modal-error');
+    errBox.textContent = '';
+    const body = { description: form.description.value };
+    if (config.hasDecisionField) body.decision = form.decision.value;
+    try {
+      await api('/' + kind + '/' + entry.id, { method: 'PATCH', body: JSON.stringify(body) });
+      close();
+      if (onUpdated) onUpdated();
+    } catch (err) {
+      errBox.textContent = err.message;
+    }
+  });
 }
 
 // ---------------- TEAM (admin) ----------------
