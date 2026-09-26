@@ -101,13 +101,13 @@ function seed() {
       }
     ],
     tasks: [
-      { id: 1, projectId: 1, title: 'Deck load rating analysis', description: 'Run updated load rating for the bridge deck.', requiredRole: 'Structural', assigneeId: 2, status: 'In Progress', progress: 40, dueDate: '2026-10-01', completedAt: null },
-      { id: 2, projectId: 1, title: 'Pier foundation soil report', description: 'Review boring logs and assess pier settlement risk.', requiredRole: 'Geotechnical', assigneeId: 3, status: 'To Do', progress: 0, dueDate: '2026-10-15', completedAt: null },
-      { id: 3, projectId: 1, title: 'Erosion control plan', description: 'Draft erosion & sediment control plan for the riverbank work zone.', requiredRole: 'Environmental', assigneeId: 4, status: 'To Do', progress: 0, dueDate: null, completedAt: null },
-      { id: 4, projectId: 2, title: 'Storm drainage design', description: 'Size new storm drains for the widened corridor.', requiredRole: 'Civil', assigneeId: 1, status: 'To Do', progress: 0, dueDate: '2026-11-01', completedAt: null },
-      { id: 5, projectId: 2, title: 'Signal timing plan', description: 'Develop signal timing plan for the two new intersections.', requiredRole: 'Transportation', assigneeId: 5, status: 'In Progress', progress: 60, dueDate: '2026-10-20', completedAt: null },
-      { id: 6, projectId: 2, title: 'Retaining wall check', description: 'Check retaining wall stability near station 3+00.', requiredRole: 'Structural', assigneeId: 2, status: 'Done', progress: 100, dueDate: '2026-09-01', completedAt: null },
-      { id: 7, projectId: 2, title: 'Wetland impact review', description: 'Assess corridor impact on adjacent wetland buffer.', requiredRole: 'Environmental', assigneeId: null, status: 'To Do', progress: 0, dueDate: null, completedAt: null }
+      { id: 1, projectId: 1, title: 'Deck load rating analysis', description: 'Run updated load rating for the bridge deck.', requiredRole: 'Structural', assigneeId: 2, status: 'In Progress', progress: 40, dueDate: '2026-10-01', completedAt: null, comments: [] },
+      { id: 2, projectId: 1, title: 'Pier foundation soil report', description: 'Review boring logs and assess pier settlement risk.', requiredRole: 'Geotechnical', assigneeId: 3, status: 'To Do', progress: 0, dueDate: '2026-10-15', completedAt: null, comments: [] },
+      { id: 3, projectId: 1, title: 'Erosion control plan', description: 'Draft erosion & sediment control plan for the riverbank work zone.', requiredRole: 'Environmental', assigneeId: 4, status: 'To Do', progress: 0, dueDate: null, completedAt: null, comments: [] },
+      { id: 4, projectId: 2, title: 'Storm drainage design', description: 'Size new storm drains for the widened corridor.', requiredRole: 'Civil', assigneeId: 1, status: 'To Do', progress: 0, dueDate: '2026-11-01', completedAt: null, comments: [] },
+      { id: 5, projectId: 2, title: 'Signal timing plan', description: 'Develop signal timing plan for the two new intersections.', requiredRole: 'Transportation', assigneeId: 5, status: 'In Progress', progress: 60, dueDate: '2026-10-20', completedAt: null, comments: [] },
+      { id: 6, projectId: 2, title: 'Retaining wall check', description: 'Check retaining wall stability near station 3+00.', requiredRole: 'Structural', assigneeId: 2, status: 'Done', progress: 100, dueDate: '2026-09-01', completedAt: null, comments: [] },
+      { id: 7, projectId: 2, title: 'Wetland impact review', description: 'Assess corridor impact on adjacent wetland buffer.', requiredRole: 'Environmental', assigneeId: null, status: 'To Do', progress: 0, dueDate: null, completedAt: null, comments: [] }
     ],
     externalContacts: [
       { id: 1, name: 'John Carter', company: 'ABC Groundworks Ltd', category: 'Subcontractor', phone: '555-0201', email: 'john.carter@abcgroundworks.example', projectId: 2 },
@@ -287,6 +287,11 @@ function backfillSchema(data) {
       // until it's marked Done again.
       if (!('completedAt' in t)) {
         t.completedAt = null;
+        changed = true;
+      }
+      // Tasks created before comments existed just start with none.
+      if (!Array.isArray(t.comments)) {
+        t.comments = [];
         changed = true;
       }
     });

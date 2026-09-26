@@ -874,6 +874,13 @@ body.gantt-dragging { user-select: none; }
 }
 .snag-thumb-wrap .snag-pin { width: 14px; height: 14px; margin-left: -7px; margin-top: -7px; }
 
+/* ============ TASK COMMENTS ============ */
+
+.task-comment-list { display: flex; flex-direction: column; gap: 0.6rem; margin: 0.6rem 0 1rem; max-height: 260px; overflow-y: auto; }
+.task-comment { background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 0.55rem 0.75rem; }
+.task-comment-meta { display: flex; justify-content: space-between; align-items: baseline; gap: 0.6rem; margin-bottom: 0.3rem; font-size: 0.82rem; }
+.task-comment-text { margin: 0; font-size: 0.88rem; white-space: pre-wrap; overflow-wrap: anywhere; }
+
 /* ============ RFIs ============ */
 
 .rfi-card { margin-bottom: 1rem; }

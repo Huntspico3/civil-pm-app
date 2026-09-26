@@ -180,6 +180,15 @@ function canSeeProject(user, project, tasks) {
   return tasks.some(t => t.projectId === project.id && t.assigneeId === user.id);
 }
 
+// Can this user see this specific task? Same rule GET /api/projects/:id/tasks
+// and GET /api/tasks already apply: admin or this project's manager sees
+// every task in it, everyone else only their own assigned task.
+function canSeeTask(user, task, project) {
+  if (user.isAdmin) return true;
+  if (project && project.createdBy === user.id) return true;
+  return task.assigneeId === user.id;
+}
+
 const HEX_COLOR_RE = /^#[0-9a-fA-F]{6}$/;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -460,6 +469,12 @@ app.get('/api/projects/:id/weather', requireAuth, async (req, res) => {
 });
 
 // --- tasks ---
+// Comments live on each task (task.comments), enriched with the commenter's
+// user record whenever a task is loaded — never a separate fetch.
+function enrichComments(t, data) {
+  return (t.comments || []).map(c => ({ ...c, author: data.users.find(u => u.id === c.authorId) || null }));
+}
+
 app.get('/api/projects/:id/tasks', requireAuth, (req, res) => {
   const data = db.load();
   const project = data.projects.find(p => p.id === Number(req.params.id));
@@ -472,7 +487,8 @@ app.get('/api/projects/:id/tasks', requireAuth, (req, res) => {
 
   const withAssignee = tasks.map(t => ({
     ...t,
-    assignee: data.users.find(u => u.id === t.assigneeId) || null
+    assignee: data.users.find(u => u.id === t.assigneeId) || null,
+    comments: enrichComments(t, data)
   }));
   res.json(withAssignee);
 });
@@ -514,7 +530,8 @@ app.post('/api/projects/:id/tasks', requireAuth, (req, res) => {
     status: data.taskStatuses[0],
     progress: 0,
     dueDate: dueDate || null,
-    completedAt: null
+    completedAt: null,
+    comments: []
   };
   data.tasks.push(task);
   db.save(data);
@@ -587,7 +604,8 @@ app.post('/api/projects/:id/tasks/import/confirm', requireAuth, (req, res) => {
       status: r.status,
       progress: r.status === doneStatus ? 100 : 0,
       dueDate: r.dueDate || null,
-      completedAt: r.status === doneStatus ? new Date().toISOString() : null
+      completedAt: r.status === doneStatus ? new Date().toISOString() : null,
+      comments: []
     };
     data.tasks.push(task);
     return task;
@@ -661,16 +679,34 @@ app.patch('/api/tasks/:id', requireAuth, (req, res) => {
   }
 
   db.save(data);
-  res.json({ ...task, assignee: data.users.find(u => u.id === task.assigneeId) || null });
+  res.json({ ...task, assignee: data.users.find(u => u.id === task.assigneeId) || null, comments: enrichComments(task, data) });
 });
 
 function enrichTask(t, data) {
   return {
     ...t,
     assignee: data.users.find(u => u.id === t.assigneeId) || null,
-    project: data.projects.find(p => p.id === t.projectId) || null
+    project: data.projects.find(p => p.id === t.projectId) || null,
+    comments: enrichComments(t, data)
   };
 }
+
+app.post('/api/tasks/:id/comments', requireAuth, (req, res) => {
+  const data = db.load();
+  const task = data.tasks.find(t => t.id === Number(req.params.id));
+  if (!task) return res.status(404).json({ error: 'Task not found' });
+  const project = data.projects.find(p => p.id === task.projectId);
+  if (!canSeeTask(req.user, task, project)) return res.status(403).json({ error: 'Not permitted to view this task' });
+
+  const text = (req.body.text || '').trim();
+  if (!text) return res.status(400).json({ error: 'Comment text is required' });
+
+  if (!Array.isArray(task.comments)) task.comments = [];
+  task.comments.push({ authorId: req.user.id, text, createdAt: new Date().toISOString() });
+  db.save(data);
+
+  res.status(201).json(enrichTask(task, data));
+});
 
 // A single, filterable/sortable/paginated task list — the shared backbone
 // behind the Task Board, My Tasks, and a project's List View, so search,

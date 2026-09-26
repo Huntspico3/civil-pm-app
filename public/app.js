@@ -1723,6 +1723,7 @@ function showTaskModal(main, task, onUpdated) {
           ${taskProgressBarHtml(task, canChangeStatus, 'lg')}
         </div>
         <div id="task-modal-error" class="error-text"></div>
+        <div id="task-modal-comments"></div>
       </div>
     </div>
   `;
@@ -1731,6 +1732,8 @@ function showTaskModal(main, task, onUpdated) {
   const close = () => { modalRoot.innerHTML = ''; };
   document.getElementById('task-modal-close').addEventListener('click', close);
   overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+
+  renderTaskModalComments(modalRoot, task);
 
   const refresh = () => { close(); if (onUpdated) onUpdated(taskId); };
 
@@ -1772,6 +1775,63 @@ function showTaskModal(main, task, onUpdated) {
     });
   }
   bindTaskProgressBars(modalRoot, refresh);
+}
+
+// Renders the comment thread + "add a comment" form into the task modal's
+// #task-modal-comments placeholder, and wires the form to post a new one.
+// Posting a comment refreshes just this section in place rather than
+// closing the whole modal (via the shared `refresh()` pattern every other
+// field here uses) — a discussion thread should stay open while you use it.
+function renderTaskModalComments(modalRoot, task) {
+  const container = modalRoot.querySelector('#task-modal-comments');
+  if (!container) return;
+
+  const comments = task.comments || [];
+  const listHtml = comments.length === 0
+    ? `<p class="hint">No comments yet.</p>`
+    : `<div class="task-comment-list">${comments.map(c => `
+        <div class="task-comment">
+          <div class="task-comment-meta">
+            <strong>${escapeHtml(c.author ? c.author.name : 'Unknown')}</strong>
+            <span class="hint">${formatDateTime(c.createdAt)}</span>
+          </div>
+          <p class="task-comment-text">${escapeHtml(c.text)}</p>
+        </div>
+      `).join('')}</div>`;
+
+  container.innerHTML = `
+    <h3>Comments</h3>
+    ${listHtml}
+    <form id="task-comment-form">
+      <textarea name="text" placeholder="Add a comment…" required></textarea>
+      <button class="btn small" type="submit">Add Comment</button>
+      <div id="task-comment-error" class="error-text"></div>
+    </form>
+  `;
+
+  container.querySelector('#task-comment-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const form = e.target;
+    const errBox = form.querySelector('#task-comment-error');
+    errBox.textContent = '';
+    const textarea = form.querySelector('textarea[name="text"]');
+    const text = textarea.value.trim();
+    if (!text) return;
+
+    const submitBtn = form.querySelector('button[type="submit"]');
+    submitBtn.disabled = true;
+    try {
+      const updatedTask = await api('/tasks/' + task.id + '/comments', {
+        method: 'POST',
+        body: JSON.stringify({ text })
+      });
+      task.comments = updatedTask.comments;
+      renderTaskModalComments(modalRoot, task);
+    } catch (err) {
+      errBox.textContent = err.message;
+      submitBtn.disabled = false;
+    }
+  });
 }
 
 // ---------------- PROJECT RFIs ----------------
@@ -2652,6 +2712,14 @@ function formatDate(str) {
   if (!str) return '—';
   const d = new Date(str + 'T00:00:00');
   return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+}
+
+// Same style as formatDate, plus a time — used for timestamps that carry a
+// real time of day (e.g. a comment), unlike the date-only fields above.
+function formatDateTime(isoStr) {
+  if (!isoStr) return '—';
+  const d = new Date(isoStr);
+  return d.toLocaleString(undefined, { year: 'numeric', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 }
 
 function monthLabel(d) {
