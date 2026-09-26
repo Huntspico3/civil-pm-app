@@ -1002,7 +1002,7 @@ async function renderMyTasks(main) {
     ? emptyStateHtml(hasActiveTaskFilters(filters) ? 'No tasks match these filters.' : `${user.name} has no assigned tasks.`)
     : `
       <table>
-        <thead><tr><th>Task</th><th>Project</th><th>Discipline</th><th>Status</th><th>Progress</th><th>Due</th></tr></thead>
+        <thead><tr><th>Task</th><th>Project</th><th>Discipline</th><th>Status</th><th>Progress</th><th>Start</th><th>Target Completion</th></tr></thead>
         <tbody>
           ${tasks.map(t => `
             <tr class="task-row-clickable" data-open-task="${t.id}">
@@ -1011,6 +1011,7 @@ async function renderMyTasks(main) {
               <td><span class="badge role-${escapeHtml(t.requiredRole)}">${escapeHtml(t.requiredRole)}</span></td>
               <td><span class="status ${escapeHtml(statusClass(t.status))}">${escapeHtml(t.status)}</span></td>
               <td>${taskProgressBarHtml(t, false, 'sm')}</td>
+              <td>${formatDate(t.startDate)}</td>
               <td>${formatDate(t.dueDate)}</td>
             </tr>
           `).join('')}
@@ -1254,7 +1255,7 @@ async function renderProjectDetail(main, projectId) {
   `;
 
   const taskRows = tasks.length === 0
-    ? emptyStateRowHtml(hasActiveTaskFilters(filters) ? 'No tasks match these filters.' : 'No tasks yet.', 6)
+    ? emptyStateRowHtml(hasActiveTaskFilters(filters) ? 'No tasks match these filters.' : 'No tasks yet.', 7)
     : tasks.map(t => {
         const canChangeStatus = isManager || t.assigneeId === state.me.id;
         return `
@@ -1275,6 +1276,7 @@ async function renderProjectDetail(main, projectId) {
                 : `<span class="status ${escapeHtml(statusClass(t.status))}">${escapeHtml(t.status)}</span>`}
             </td>
             <td>${taskProgressBarHtml(t, false, 'sm')}</td>
+            <td>${formatDate(t.startDate)}</td>
             <td>${formatDate(t.dueDate)}</td>
           </tr>
         `;
@@ -1298,7 +1300,7 @@ async function renderProjectDetail(main, projectId) {
       </div>
       ${taskFilterBarHtml(filters, { lockedProjectId: projectId })}
       <table>
-        <thead><tr><th>Task</th><th>Role</th><th>Assignee</th><th>Status</th><th>Progress</th><th>Due</th></tr></thead>
+        <thead><tr><th>Task</th><th>Role</th><th>Assignee</th><th>Status</th><th>Progress</th><th>Start</th><th>Target Completion</th></tr></thead>
         <tbody>${taskRows}</tbody>
       </table>
       ${tasks.length > 0 ? paginationBarHtml(page, totalPages, total) : ''}
@@ -1321,7 +1323,11 @@ async function renderProjectDetail(main, projectId) {
             <div class="hint">Suggestions are matched to the required role above.</div>
           </div>
           <div>
-            <label>Due date</label>
+            <label>Start Date</label>
+            <input name="startDate" type="date" />
+          </div>
+          <div>
+            <label>Target Completion Date</label>
             <input name="dueDate" type="date" />
           </div>
         </div>
@@ -1432,6 +1438,7 @@ async function renderProjectDetail(main, projectId) {
             description: form.description.value,
             requiredRole: form.requiredRole.value,
             assigneeId: form.assigneeId.value || null,
+            startDate: form.startDate.value || null,
             dueDate: form.dueDate.value || null
           })
         });
@@ -1581,7 +1588,8 @@ async function renderProjectBoard(main, projectId) {
           <div class="board-card-meta">
             <span class="badge role-${escapeHtml(t.requiredRole)}">${escapeHtml(t.requiredRole)}</span>
             <span>${t.assignee ? escapeHtml(t.assignee.name) : 'Unassigned'}</span>
-            ${t.dueDate ? `<span>Due ${formatDate(t.dueDate)}</span>` : ''}
+            ${t.startDate ? `<span>Start ${formatDate(t.startDate)}</span>` : ''}
+            ${t.dueDate ? `<span>Target ${formatDate(t.dueDate)}</span>` : ''}
           </div>
           ${taskProgressBarHtml(t, canEditProgress, 'sm')}
         </div>
@@ -1711,8 +1719,16 @@ function showTaskModal(main, task, onUpdated) {
               ? `<select class="select-inline" id="task-modal-status">${state.taskStatuses.map(s => `<option value="${escapeHtml(s)}" ${s === task.status ? 'selected' : ''}>${escapeHtml(s)}</option>`).join('')}</select>`
               : `<div><span class="status ${escapeHtml(statusClass(task.status))}">${escapeHtml(task.status)}</span></div>`}
           </div>
+        </div>
+        <div class="form-row">
           <div>
-            <label>Due date</label>
+            <label>Start Date</label>
+            ${isManager
+              ? `<input class="select-inline" type="date" id="task-modal-start-date" value="${task.startDate || ''}" />`
+              : `<div>${formatDate(task.startDate)}</div>`}
+          </div>
+          <div>
+            <label>Target Completion Date</label>
             ${isManager
               ? `<input class="select-inline" type="date" id="task-modal-due-date" value="${task.dueDate || ''}" />`
               : `<div>${formatDate(task.dueDate)}</div>`}
@@ -1721,6 +1737,15 @@ function showTaskModal(main, task, onUpdated) {
         <div>
           <label>Progress</label>
           ${taskProgressBarHtml(task, canChangeStatus, 'lg')}
+        </div>
+        <div>
+          <label>Work Done in Period</label>
+          ${canChangeStatus
+            ? `
+              <textarea id="task-modal-work-done" placeholder="What's been completed since the last update?">${escapeHtml(task.workDone || '')}</textarea>
+              <button class="btn small secondary" type="button" id="task-modal-work-done-save">Save</button>
+            `
+            : (task.workDone ? `<p>${escapeHtml(task.workDone)}</p>` : `<p class="hint">Nothing noted yet.</p>`)}
         </div>
         <div id="task-modal-error" class="error-text"></div>
         <div id="task-modal-comments"></div>
@@ -1763,6 +1788,17 @@ function showTaskModal(main, task, onUpdated) {
       }
     });
   }
+  const startDateInput = document.getElementById('task-modal-start-date');
+  if (startDateInput) {
+    startDateInput.addEventListener('change', async () => {
+      try {
+        await api('/tasks/' + taskId, { method: 'PATCH', body: JSON.stringify({ startDate: startDateInput.value || null }) });
+        refresh();
+      } catch (err) {
+        errBox.textContent = err.message;
+      }
+    });
+  }
   const dueDateInput = document.getElementById('task-modal-due-date');
   if (dueDateInput) {
     dueDateInput.addEventListener('change', async () => {
@@ -1771,6 +1807,20 @@ function showTaskModal(main, task, onUpdated) {
         refresh();
       } catch (err) {
         errBox.textContent = err.message;
+      }
+    });
+  }
+  const workDoneSaveBtn = document.getElementById('task-modal-work-done-save');
+  if (workDoneSaveBtn) {
+    workDoneSaveBtn.addEventListener('click', async () => {
+      const workDoneInput = document.getElementById('task-modal-work-done');
+      workDoneSaveBtn.disabled = true;
+      try {
+        await api('/tasks/' + taskId, { method: 'PATCH', body: JSON.stringify({ workDone: workDoneInput.value }) });
+        refresh();
+      } catch (err) {
+        errBox.textContent = err.message;
+        workDoneSaveBtn.disabled = false;
       }
     });
   }

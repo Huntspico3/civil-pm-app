@@ -506,11 +506,14 @@ app.post('/api/projects/:id/tasks', requireAuth, (req, res) => {
     return res.status(403).json({ error: "Only an admin or this project's manager can create tasks" });
   }
 
-  const { title, description, requiredRole, assigneeId, dueDate } = req.body;
+  const { title, description, requiredRole, assigneeId, startDate, dueDate } = req.body;
   if (!title || !requiredRole) return res.status(400).json({ error: 'title and requiredRole are required' });
   if (!data.roles.includes(requiredRole)) return res.status(400).json({ error: 'Invalid role' });
+  if (startDate !== undefined && startDate !== null && startDate !== '' && !DATE_RE.test(startDate)) {
+    return res.status(400).json({ error: 'Start date must be in YYYY-MM-DD format' });
+  }
   if (dueDate !== undefined && dueDate !== null && dueDate !== '' && !DATE_RE.test(dueDate)) {
-    return res.status(400).json({ error: 'Due date must be in YYYY-MM-DD format' });
+    return res.status(400).json({ error: 'Target completion date must be in YYYY-MM-DD format' });
   }
 
   const targetAssigneeId = assigneeId ? Number(assigneeId) : null;
@@ -529,8 +532,10 @@ app.post('/api/projects/:id/tasks', requireAuth, (req, res) => {
     assigneeId: assignee ? assignee.id : null,
     status: data.taskStatuses[0],
     progress: 0,
+    startDate: startDate || null,
     dueDate: dueDate || null,
     completedAt: null,
+    workDone: '',
     comments: []
   };
   data.tasks.push(task);
@@ -603,8 +608,10 @@ app.post('/api/projects/:id/tasks/import/confirm', requireAuth, (req, res) => {
       assigneeId: r.assigneeId || null,
       status: r.status,
       progress: r.status === doneStatus ? 100 : 0,
+      startDate: null,
       dueDate: r.dueDate || null,
       completedAt: r.status === doneStatus ? new Date().toISOString() : null,
+      workDone: '',
       comments: []
     };
     data.tasks.push(task);
@@ -627,7 +634,7 @@ app.patch('/api/tasks/:id', requireAuth, (req, res) => {
   const project = data.projects.find(p => p.id === task.projectId);
   const isManager = req.user.isAdmin || project.createdBy === req.user.id;
   const isAssignee = task.assigneeId === req.user.id;
-  const { assigneeId, status, title, description, requiredRole, progress, dueDate } = req.body;
+  const { assigneeId, status, title, description, requiredRole, progress, startDate, dueDate, workDone } = req.body;
 
   // A non-manager may still assign a task to themselves (claiming unassigned
   // work), so that alone must be enough to pass the general edit gate below.
@@ -671,11 +678,23 @@ app.patch('/api/tasks/:id', requireAuth, (req, res) => {
     if (!data.roles.includes(requiredRole)) return res.status(400).json({ error: 'Invalid role' });
     task.requiredRole = requiredRole;
   }
+  if (isManager && startDate !== undefined) {
+    if (startDate !== null && startDate !== '' && !DATE_RE.test(startDate)) {
+      return res.status(400).json({ error: 'Start date must be in YYYY-MM-DD format' });
+    }
+    task.startDate = startDate || null;
+  }
   if (isManager && dueDate !== undefined) {
     if (dueDate !== null && dueDate !== '' && !DATE_RE.test(dueDate)) {
-      return res.status(400).json({ error: 'Due date must be in YYYY-MM-DD format' });
+      return res.status(400).json({ error: 'Target completion date must be in YYYY-MM-DD format' });
     }
     task.dueDate = dueDate || null;
+  }
+  // "Work Done in Period" is a progress note — open to whoever's actually
+  // doing the work or managing it, same tier as changing status/progress,
+  // not the manager-only tier used for title/description/dates above.
+  if ((isManager || isAssignee) && workDone !== undefined) {
+    task.workDone = String(workDone || '').trim();
   }
 
   db.save(data);
