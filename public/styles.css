@@ -269,14 +269,17 @@ h3 { font-size: 0.95rem; font-weight: 700; margin: 0 0 0.6rem; }
 .status.status-Closed { color: var(--success); border-color: var(--success-border); background: var(--success-bg); }
 .status.status-Decided { color: var(--success); border-color: var(--success-border); background: var(--success-bg); }
 .status.status-Pending { color: var(--warning); border-color: var(--warning-border); background: var(--warning-bg); }
+.status.status-Approved { color: var(--success); border-color: var(--success-border); background: var(--success-bg); }
+.status.status-Rejected { color: var(--danger); border-color: var(--danger-border); background: var(--danger-bg); }
 
-/* The risk/decision registers' status dropdown is always the live control
-   (anyone who can see the project can change it, so there's no read-only
-   badge state to fall back to) — tinting the select itself the same way
-   the read-only .status badges are tinted keeps it glanceable at a color
-   level, consistent with how status reads everywhere else in the app. */
+/* The risk/decision/change-order registers' status dropdown is always the
+   live control (anyone who can see the project can change it, so there's no
+   read-only badge state to fall back to) — tinting the select itself the
+   same way the read-only .status badges are tinted keeps it glanceable at a
+   color level, consistent with how status reads everywhere else in the app. */
 select.select-inline.status-Open, select.select-inline.status-Pending { border-color: var(--warning-border); background: var(--warning-bg); color: var(--warning); }
-select.select-inline.status-Closed, select.select-inline.status-Decided { border-color: var(--success-border); background: var(--success-bg); color: var(--success); }
+select.select-inline.status-Closed, select.select-inline.status-Decided, select.select-inline.status-Approved { border-color: var(--success-border); background: var(--success-bg); color: var(--success); }
+select.select-inline.status-Rejected { border-color: var(--danger-border); background: var(--danger-bg); color: var(--danger); }
 
 /* ============ FORMS ============ */
 

@@ -11,6 +11,32 @@ const fileValidation = require('./fileValidation');
 const taskImport = require('./taskImport');
 const weather = require('./weather');
 const rateLimit = require('express-rate-limit');
+const auditLog = require('./auditLog');
+
+// Records a meaningful data change to the audit log. Always server-side —
+// every call site below is inside a route handler after its own permission
+// check has already passed, using req.user (never anything client-supplied)
+// for who, and the server's own clock for when. entityLabel/projectName are
+// snapshotted as plain strings at the time of the action rather than IDs
+// resolved later, so the log still reads correctly even if that record is
+// later renamed or removed.
+function logAudit(req, action, entityLabel, projectName) {
+  auditLog.append({
+    timestamp: new Date().toISOString(),
+    userId: req.user.id,
+    userName: req.user.name,
+    action,
+    entityLabel: entityLabel || null,
+    projectName: projectName || null
+  });
+}
+
+// For audit entity labels built from free text (an RFI question, a risk
+// description, ...) that could otherwise run long in a table cell.
+function truncate(str, n) {
+  const s = String(str || '');
+  return s.length > n ? s.slice(0, n - 1) + '…' : s;
+}
 
 const UPLOADS_DIR = path.join(db.DATA_DIR, 'uploads');
 fs.mkdirSync(UPLOADS_DIR, { recursive: true });
@@ -234,7 +260,7 @@ function withComputedProgress(project, data) {
 // categories) — all managed the same way from the Settings page. `usageParts`
 // returns human-readable counts of what currently uses a given option, so removal
 // can be blocked with a clear message instead of silently breaking existing data.
-function registerOptionList(path, getList, usageParts) {
+function registerOptionList(path, label, getList, usageParts) {
   app.get(path, (req, res) => res.json(getList(db.load())));
 
   app.post(path, requireAdmin, (req, res) => {
@@ -248,6 +274,7 @@ function registerOptionList(path, getList, usageParts) {
     }
     list.push(name);
     db.save(data);
+    logAudit(req, `${label} option added`, name, null);
     res.status(201).json(list);
   });
 
@@ -264,6 +291,7 @@ function registerOptionList(path, getList, usageParts) {
 
     list.splice(list.indexOf(name), 1);
     db.save(data);
+    logAudit(req, `${label} option removed`, name, null);
     res.json(list);
   });
 }
@@ -272,20 +300,20 @@ function countPart(count, label) {
   return count > 0 ? [`${count} ${label}${count === 1 ? '' : 's'}`] : [];
 }
 
-registerOptionList('/api/roles', (data) => data.roles, (data, name) => [
+registerOptionList('/api/roles', 'Role', (data) => data.roles, (data, name) => [
   ...countPart(data.users.filter(u => u.role === name).length, 'team member'),
   ...countPart(data.tasks.filter(t => t.requiredRole === name).length, 'task')
 ]);
 
-registerOptionList('/api/stages', (data) => data.stages, (data, name) =>
+registerOptionList('/api/stages', 'Stage', (data) => data.stages, (data, name) =>
   countPart(data.projects.filter(p => p.stage === name).length, 'project')
 );
 
-registerOptionList('/api/task-statuses', (data) => data.taskStatuses, (data, name) =>
+registerOptionList('/api/task-statuses', 'Task status', (data) => data.taskStatuses, (data, name) =>
   countPart(data.tasks.filter(t => t.status === name).length, 'task')
 );
 
-registerOptionList('/api/external-contact-categories', (data) => data.externalContactCategories, (data, name) =>
+registerOptionList('/api/external-contact-categories', 'External contact category', (data) => data.externalContactCategories, (data, name) =>
   countPart(data.externalContacts.filter(c => c.category === name).length, 'external contact')
 );
 
@@ -316,6 +344,7 @@ app.post('/api/users', requireAdmin, (req, res) => {
   data.users.push(user);
   data.userCredentials.push({ userId: user.id, passwordHash: auth.hashPassword(password) });
   db.save(data);
+  logAudit(req, 'Team member added', user.name, null);
   res.status(201).json(user);
 });
 
@@ -368,6 +397,7 @@ app.post('/api/projects', requireAdmin, (req, res) => {
   };
   data.projects.push(project);
   db.save(data);
+  logAudit(req, 'Project created', project.name, project.name);
   res.status(201).json(withComputedProgress(project, data));
 });
 
@@ -388,10 +418,12 @@ app.patch('/api/projects/:id', requireAuth, async (req, res) => {
   if (!canEdit) return res.status(403).json({ error: 'Only an admin or this project\'s creator can edit it' });
 
   const { color, progress, progressMode, startDate, endDate, location } = req.body;
+  const changes = [];
 
   // Resolved once here (not on every weather fetch) — the project just
   // stores the coordinates the location string last resolved to.
   if (location !== undefined) {
+    changes.push('location');
     const trimmed = (location || '').trim();
     if (!trimmed) {
       project.location = null;
@@ -415,6 +447,7 @@ app.patch('/api/projects/:id', requireAuth, async (req, res) => {
   if (color !== undefined) {
     if (!HEX_COLOR_RE.test(color)) return res.status(400).json({ error: 'Color must be a hex value like #2563eb' });
     project.color = color;
+    changes.push('color');
   }
   if (progress !== undefined) {
     if (typeof progress !== 'number' || progress < 0 || progress > 100) {
@@ -422,12 +455,14 @@ app.patch('/api/projects/:id', requireAuth, async (req, res) => {
     }
     project.progress = progress;
     project.progressMode = 'manual';
+    changes.push('progress');
   }
   if (progressMode !== undefined) {
     if (progressMode !== 'auto' && progressMode !== 'manual') {
       return res.status(400).json({ error: 'progressMode must be "auto" or "manual"' });
     }
     project.progressMode = progressMode;
+    changes.push('progress mode');
   }
   if (startDate !== undefined || endDate !== undefined) {
     const nextStart = startDate !== undefined ? startDate : project.startDate;
@@ -440,9 +475,11 @@ app.patch('/api/projects/:id', requireAuth, async (req, res) => {
     }
     project.startDate = nextStart;
     project.endDate = nextEnd;
+    changes.push('dates');
   }
 
   db.save(data);
+  if (changes.length > 0) logAudit(req, `Project updated (${changes.join(', ')})`, project.name, project.name);
   res.json(withComputedProgress(project, data));
 });
 
@@ -540,6 +577,7 @@ app.post('/api/projects/:id/tasks', requireAuth, (req, res) => {
   };
   data.tasks.push(task);
   db.save(data);
+  logAudit(req, 'Task created', task.title, project.name);
   res.status(201).json({ ...task, assignee });
 });
 
@@ -617,7 +655,10 @@ app.post('/api/projects/:id/tasks/import/confirm', requireAuth, (req, res) => {
     data.tasks.push(task);
     return task;
   });
-  if (created.length) db.save(data);
+  if (created.length) {
+    db.save(data);
+    logAudit(req, `Tasks imported (${created.length})`, `${created.length} task${created.length === 1 ? '' : 's'}`, project.name);
+  }
 
   res.json({
     createdCount: created.length,
@@ -643,6 +684,8 @@ app.patch('/api/tasks/:id', requireAuth, (req, res) => {
 
   if (!isManager && !isAssignee && !isSelfAssign) return res.status(403).json({ error: 'Not permitted to edit this task' });
 
+  const changes = [];
+
   if (targetAssigneeId !== undefined) {
     if (!isManager && targetAssigneeId !== null && targetAssigneeId !== req.user.id) {
       return res.status(403).json({ error: 'Only an admin or this project\'s manager can assign this task to someone else — you can assign it to yourself instead.' });
@@ -654,6 +697,7 @@ app.patch('/api/tasks/:id', requireAuth, (req, res) => {
       if (!assignee) return res.status(400).json({ error: 'Assignee not found' });
       task.assigneeId = assignee.id;
     }
+    changes.push('reassigned');
   }
   if (status !== undefined) {
     if (!data.taskStatuses.includes(status)) return res.status(400).json({ error: 'Invalid status' });
@@ -665,39 +709,46 @@ app.patch('/api/tasks/:id', requireAuth, (req, res) => {
       task.completedAt = null;
     }
     task.status = status;
+    changes.push(`status set to "${status}"`);
   }
   if (progress !== undefined) {
     if (typeof progress !== 'number' || progress < 0 || progress > 100) {
       return res.status(400).json({ error: 'Progress must be a number between 0 and 100' });
     }
     task.progress = Math.round(progress);
+    changes.push(`progress set to ${task.progress}%`);
   }
-  if (isManager && title !== undefined) task.title = title;
-  if (isManager && description !== undefined) task.description = description;
+  if (isManager && title !== undefined) { task.title = title; changes.push('title updated'); }
+  if (isManager && description !== undefined) { task.description = description; changes.push('description updated'); }
   if (isManager && requiredRole !== undefined) {
     if (!data.roles.includes(requiredRole)) return res.status(400).json({ error: 'Invalid role' });
     task.requiredRole = requiredRole;
+    changes.push('discipline updated');
   }
   if (isManager && startDate !== undefined) {
     if (startDate !== null && startDate !== '' && !DATE_RE.test(startDate)) {
       return res.status(400).json({ error: 'Start date must be in YYYY-MM-DD format' });
     }
     task.startDate = startDate || null;
+    changes.push('start date updated');
   }
   if (isManager && dueDate !== undefined) {
     if (dueDate !== null && dueDate !== '' && !DATE_RE.test(dueDate)) {
       return res.status(400).json({ error: 'Target completion date must be in YYYY-MM-DD format' });
     }
     task.dueDate = dueDate || null;
+    changes.push('target completion date updated');
   }
   // "Work Done in Period" is a progress note — open to whoever's actually
   // doing the work or managing it, same tier as changing status/progress,
   // not the manager-only tier used for title/description/dates above.
   if ((isManager || isAssignee) && workDone !== undefined) {
     task.workDone = String(workDone || '').trim();
+    changes.push('work done note updated');
   }
 
   db.save(data);
+  if (changes.length > 0) logAudit(req, `Task updated (${changes.join('; ')})`, task.title, project ? project.name : null);
   res.json({ ...task, assignee: data.users.find(u => u.id === task.assigneeId) || null, comments: enrichComments(task, data) });
 });
 
@@ -723,6 +774,7 @@ app.post('/api/tasks/:id/comments', requireAuth, (req, res) => {
   if (!Array.isArray(task.comments)) task.comments = [];
   task.comments.push({ authorId: req.user.id, text, createdAt: new Date().toISOString() });
   db.save(data);
+  logAudit(req, 'Comment added', task.title, project ? project.name : null);
 
   res.status(201).json(enrichTask(task, data));
 });
@@ -1131,6 +1183,7 @@ app.post('/api/reports', requireAuth, upload.fields([{ name: 'audio', maxCount: 
     };
     data.reports.push(report);
     db.save(data);
+    logAudit(req, 'Offsite report submitted', project.name, project.name);
     res.status(201).json(enrichReport(report, data));
   } catch (err) {
     cleanup();
@@ -1170,6 +1223,7 @@ app.patch('/api/reports/:id', requireManager, (req, res) => {
   if (!report) return res.status(404).json({ error: 'Report not found' });
 
   const { draftText, approve } = req.body;
+  const reportProject = data.projects.find(p => p.id === report.projectId);
   if (draftText !== undefined) report.draftText = draftText;
   if (approve) {
     report.status = 'approved';
@@ -1178,6 +1232,12 @@ app.patch('/api/reports/:id', requireManager, (req, res) => {
   }
 
   db.save(data);
+  logAudit(
+    req,
+    approve ? 'Offsite report approved' : 'Offsite report draft edited',
+    reportProject ? reportProject.name : null,
+    reportProject ? reportProject.name : null
+  );
   res.json(enrichReport(report, data));
 });
 
@@ -1256,6 +1316,7 @@ app.post('/api/projects/:id/rfis', requireAuth, (req, res) => {
   };
   data.rfis.push(rfi);
   db.save(data);
+  logAudit(req, 'RFI created', truncate(rfi.question, 80), project.name);
   res.status(201).json(enrichRfi(rfi, data));
 
   // Fire-and-forget: notification email should never delay or fail the response above.
@@ -1287,6 +1348,7 @@ app.patch('/api/rfis/:id', requireAuth, (req, res) => {
   rfi.answeredAt = new Date().toISOString();
 
   db.save(data);
+  logAudit(req, 'RFI answered', truncate(rfi.question, 80), rfiProject ? rfiProject.name : null);
   res.json(enrichRfi(rfi, data));
 });
 
@@ -1412,6 +1474,7 @@ app.post('/api/projects/:id/documents', requireAuth, documentUpload.single('file
     };
     data.documents.push(document);
     db.save(data);
+    logAudit(req, `Document uploaded (${version})`, docNumber, project.name);
     res.status(201).json(enrichDocument(document, data, { versionCount: data.documents.filter(d => d.projectId === project.id && documentGroupKey(d) === documentGroupKey(document)).length }));
   } catch (err) {
     cleanup();
@@ -1557,6 +1620,7 @@ app.post('/api/projects/:id/snags', requireAuth, upload.single('photos'), (req, 
     };
     data.snags.push(snag);
     db.save(data);
+    logAudit(req, 'Snag logged', truncate(snag.description, 80), project.name);
     res.status(201).json(enrichSnag(snag, data));
   } catch (err) {
     cleanup();
@@ -1613,6 +1677,7 @@ app.post('/api/projects/:id/snags/from-report', requireAuth, (req, res) => {
   };
   data.snags.push(snag);
   db.save(data);
+  logAudit(req, 'Snag logged (from report)', truncate(snag.description, 80), project.name);
   res.status(201).json(enrichSnag(snag, data));
 });
 
@@ -1626,11 +1691,13 @@ app.patch('/api/snags/:id', requireAuth, (req, res) => {
   if (!isManager && !isAssignee) return res.status(403).json({ error: 'Not permitted to edit this snag' });
 
   const { status, assigneeId } = req.body;
+  const changes = [];
   if (status !== undefined) {
     if (!SNAG_STATUSES.includes(status)) return res.status(400).json({ error: 'Invalid status' });
     if (status !== snag.status) {
       snag.status = status;
       snag.statusHistory.push({ status, changedBy: req.user.id, changedAt: new Date().toISOString() });
+      changes.push(`status set to "${status}"`);
     }
   }
   if (assigneeId !== undefined) {
@@ -1642,22 +1709,26 @@ app.patch('/api/snags/:id', requireAuth, (req, res) => {
       if (!assignee) return res.status(400).json({ error: 'Assignee not found' });
       snag.assigneeId = assignee.id;
     }
+    changes.push('reassigned');
   }
 
   db.save(data);
+  if (changes.length > 0) logAudit(req, `Snag updated (${changes.join(', ')})`, truncate(snag.description, 80), project ? project.name : null);
   res.json(enrichSnag(snag, data));
 });
 
-// --- risk register & decision register (per project) ---
+// --- risk register, decision register & change order register (per project) ---
 // Deliberately the simplest of the project sub-registers in this app: no
 // pinned photos, no status history, no manager-only gate on creation —
-// anyone who can see the project can add or edit an entry in either
-// register, same as the ask. One shared implementation drives both, since
-// a risk and a decision are the same shape (a description, who raised it
-// and when, a status) plus one extra free-text field decisions have.
+// anyone who can see the project can add or edit an entry in any of the
+// three, same as the ask. One shared implementation drives all three, since
+// they're the same shape (a description, who raised it and when, a status)
+// plus one extra free-text field two of them have (what was decided / the
+// cost-or-schedule impact).
 const REGISTER_TYPES = {
-  risks: { collection: 'risks', idKind: 'risk', statuses: ['Open', 'Closed'], hasDecisionField: false, label: 'Risk' },
-  decisions: { collection: 'decisions', idKind: 'decision', statuses: ['Pending', 'Decided'], hasDecisionField: true, label: 'Decision' }
+  risks: { collection: 'risks', idKind: 'risk', statuses: ['Open', 'Closed'], extraField: null, label: 'Risk' },
+  decisions: { collection: 'decisions', idKind: 'decision', statuses: ['Pending', 'Decided'], extraField: 'decision', label: 'Decision' },
+  'change-orders': { collection: 'changeOrders', idKind: 'changeOrder', statuses: ['Pending', 'Approved', 'Rejected'], extraField: 'impact', label: 'Change Order' }
 };
 
 function enrichRegisterEntry(entry, data) {
@@ -1702,9 +1773,10 @@ function registerRoutes(pathSegment) {
       status: config.statuses[0],
       createdAt: new Date().toISOString()
     };
-    if (config.hasDecisionField) entry.decision = '';
+    if (config.extraField) entry[config.extraField] = '';
     data[config.collection].push(entry);
     db.save(data);
+    logAudit(req, `${config.label} added`, truncate(entry.description, 80), project.name);
     res.status(201).json(enrichRegisterEntry(entry, data));
   });
 
@@ -1715,27 +1787,34 @@ function registerRoutes(pathSegment) {
     const project = data.projects.find(p => p.id === entry.projectId);
     if (!project || !canSeeProject(req.user, project, data.tasks)) return res.status(403).json({ error: 'Not visible to you' });
 
-    const { description, status, decision } = req.body;
+    const { description, status } = req.body;
+    const extraValue = config.extraField ? req.body[config.extraField] : undefined;
+    const changes = [];
     if (description !== undefined) {
       const trimmed = String(description).trim();
       if (!trimmed) return res.status(400).json({ error: 'Description cannot be empty' });
       entry.description = trimmed;
+      changes.push('description updated');
     }
     if (status !== undefined) {
       if (!config.statuses.includes(status)) return res.status(400).json({ error: 'Invalid status' });
       entry.status = status;
+      changes.push(`status set to "${status}"`);
     }
-    if (config.hasDecisionField && decision !== undefined) {
-      entry.decision = String(decision).trim();
+    if (config.extraField && extraValue !== undefined) {
+      entry[config.extraField] = String(extraValue).trim();
+      changes.push(`${config.extraField} updated`);
     }
 
     db.save(data);
+    if (changes.length > 0) logAudit(req, `${config.label} updated (${changes.join(', ')})`, truncate(entry.description, 80), project.name);
     res.json(enrichRegisterEntry(entry, data));
   });
 }
 
 registerRoutes('risks');
 registerRoutes('decisions');
+registerRoutes('change-orders');
 
 // --- portfolio timeline (org-wide, visible to every logged-in user) ---
 app.get('/api/portfolio', requireAuth, (req, res) => {
@@ -1854,6 +1933,22 @@ setTimeout(() => {
 setInterval(() => {
   runWeeklySummaryCheck().catch(err => console.warn('Weekly summary check failed:', err.message));
 }, SUMMARY_CHECK_INTERVAL_MS);
+
+// --- audit log (admin-only; write-only from every other angle) ---
+// There is deliberately no PATCH/DELETE for audit entries anywhere in this
+// file, and auditLog.js itself exposes no way to alter or remove one either
+// — the only endpoint here is this read, gated to admins.
+app.get('/api/audit-log', requireAdmin, (req, res) => {
+  const { startDate, endDate, limit } = req.query;
+  let entries = auditLog.readAll();
+  if (startDate) entries = entries.filter(e => e.timestamp.slice(0, 10) >= startDate);
+  if (endDate) entries = entries.filter(e => e.timestamp.slice(0, 10) <= endDate);
+  entries.sort((a, b) => b.timestamp.localeCompare(a.timestamp));
+
+  const total = entries.length;
+  const capped = Math.min(Math.max(1, Number(limit) || 500), 2000);
+  res.json({ entries: entries.slice(0, capped), total, shown: Math.min(capped, total) });
+});
 
 // Multer (and other upload) errors land here instead of the default HTML error page.
 app.use((err, req, res, next) => {

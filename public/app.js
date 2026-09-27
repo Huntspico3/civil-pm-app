@@ -6,7 +6,7 @@ const state = {
   stages: [],
   taskStatuses: [],
   externalContactCategories: [],
-  view: 'dashboard', // 'dashboard' | 'projects' | 'project' | 'project-board' | 'project-rfis' | 'project-documents' | 'project-snags' | 'project-risks' | 'project-decisions' | 'contacts' | 'team' | 'settings' | 'portfolio' | 'my-tasks' | 'offsite-reports'
+  view: 'dashboard', // 'dashboard' | 'projects' | 'project' | 'project-board' | 'project-rfis' | 'project-documents' | 'project-snags' | 'project-risks' | 'project-decisions' | 'project-change-orders' | 'contacts' | 'team' | 'audit-log' | 'settings' | 'portfolio' | 'my-tasks' | 'offsite-reports'
   activeProjectId: null,
   dashboardGroupBy: 'project',
   myTasksUserId: null,
@@ -619,6 +619,7 @@ const NAV_ICONS = {
   'contacts': '<svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.2"/><path d="M5 20c1.2-3.4 4-5 7-5s5.8 1.6 7 5"/></svg>',
   'external-contacts': '<svg viewBox="0 0 24 24"><path d="M5 21V5a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v16"/><path d="M13 21V9a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v12"/><path d="M8 8h.01M8 11h.01M8 14h.01M16 12h.01M16 15h.01"/></svg>',
   'team': '<svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3"/><path d="M2.5 20c.9-3.2 3.4-5 6.5-5s5.6 1.8 6.5 5"/><circle cx="17" cy="9" r="2.2"/><path d="M15 14.2c2.4.4 4 1.8 4.6 4"/></svg>',
+  'audit-log': '<svg viewBox="0 0 24 24"><path d="M7 3h8l4 4v14a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/><path d="M15 3v4h4"/><path d="M8 12h8M8 15.5h8M8 8.5h4"/></svg>',
   'settings': '<svg viewBox="0 0 24 24"><path d="M10.3 2.5h3.4l.5 2.4a7.6 7.6 0 0 1 2 1.2l2.3-.9 1.7 3-1.9 1.5c.1.4.1.8.1 1.3s0 .9-.1 1.3l1.9 1.5-1.7 3-2.3-.9a7.6 7.6 0 0 1-2 1.2l-.5 2.4h-3.4l-.5-2.4a7.6 7.6 0 0 1-2-1.2l-2.3.9-1.7-3 1.9-1.5A7 7 0 0 1 5.6 12c0-.5 0-.9.1-1.3L3.8 9.2l1.7-3 2.3.9a7.6 7.6 0 0 1 2-1.2z"/><circle cx="12" cy="12" r="3"/></svg>'
 };
 
@@ -633,10 +634,11 @@ function renderShell() {
   ];
   if (state.me.isAdmin || state.me.isManager) nav.push({ key: 'external-contacts', label: 'External Contacts' });
   if (state.me.isAdmin) nav.push({ key: 'team', label: 'Team' });
+  if (state.me.isAdmin) nav.push({ key: 'audit-log', label: 'Audit Log' });
   if (state.me.isAdmin) nav.push({ key: 'settings', label: 'Settings' });
 
   const navHtml = nav.map(n => `
-    <button data-nav="${n.key}" class="${state.view === n.key || (n.key === 'projects' && ['project', 'project-board', 'project-rfis', 'project-documents', 'project-snags', 'project-risks', 'project-decisions'].includes(state.view)) ? 'active' : ''}">
+    <button data-nav="${n.key}" class="${state.view === n.key || (n.key === 'projects' && ['project', 'project-board', 'project-rfis', 'project-documents', 'project-snags', 'project-risks', 'project-decisions', 'project-change-orders'].includes(state.view)) ? 'active' : ''}">
       ${NAV_ICONS[n.key] || ''}
       <span class="nav-label">${n.label}</span>
       ${n.key === 'my-tasks' && state.myOpenRfiCount > 0 ? `<span class="nav-badge" title="Open RFIs waiting on you">${state.myOpenRfiCount}</span>` : ''}
@@ -680,10 +682,12 @@ function bindShell() {
   else if (state.view === 'project-snags') renderProjectSnags(main, state.activeProjectId);
   else if (state.view === 'project-risks') renderProjectRegister(main, state.activeProjectId, 'risks');
   else if (state.view === 'project-decisions') renderProjectRegister(main, state.activeProjectId, 'decisions');
+  else if (state.view === 'project-change-orders') renderProjectRegister(main, state.activeProjectId, 'change-orders');
   else if (state.view === 'contacts') renderContacts(main);
   else if (state.view === 'external-contacts') renderExternalContacts(main);
   else if (state.view === 'team') renderTeam(main);
   else if (state.view === 'settings') renderSettings(main);
+  else if (state.view === 'audit-log') renderAuditLog(main);
   else if (state.view === 'portfolio') renderPortfolio(main);
   else if (state.view === 'my-tasks') renderMyTasks(main);
   else if (state.view === 'offsite-reports') renderOffsiteReports(main);
@@ -1185,7 +1189,8 @@ function projectTabsHtml(active) {
     { key: 'project-documents', label: 'Documents' },
     { key: 'project-snags', label: 'Snags' },
     { key: 'project-risks', label: 'Risk Register' },
-    { key: 'project-decisions', label: 'Decision Register' }
+    { key: 'project-decisions', label: 'Decision Register' },
+    { key: 'project-change-orders', label: 'Change Orders' }
   ];
   return `<div class="dash-toggle">${tabs.map(t => `
     <button class="btn ${t.key === active ? '' : 'secondary'}" data-project-tab="${t.key}">${t.label}</button>
@@ -2515,8 +2520,9 @@ async function showSnagDetailModal(main, projectId, snag, isManager, onUpdated) 
 // who can already see the project can add or edit an entry in either.
 
 const REGISTER_CONFIG = {
-  risks: { tabKey: 'project-risks', heading: 'Risk Register', itemLabel: 'Risk', statuses: ['Open', 'Closed'], hasDecisionField: false },
-  decisions: { tabKey: 'project-decisions', heading: 'Decision Register', itemLabel: 'Decision', statuses: ['Pending', 'Decided'], hasDecisionField: true }
+  risks: { tabKey: 'project-risks', heading: 'Risk Register', itemLabel: 'Risk', statuses: ['Open', 'Closed'], extraField: null },
+  decisions: { tabKey: 'project-decisions', heading: 'Decision Register', itemLabel: 'Decision', statuses: ['Pending', 'Decided'], extraField: { key: 'decision', label: 'Decision', placeholder: 'What was decided?' } },
+  'change-orders': { tabKey: 'project-change-orders', heading: 'Change Order Register', itemLabel: 'Change Order', statuses: ['Pending', 'Approved', 'Rejected'], extraField: { key: 'impact', label: 'Impact', placeholder: 'Cost/schedule impact (e.g. +$15,000, 2-week delay)' } }
 };
 
 async function renderProjectRegister(main, projectId, kind) {
@@ -2532,7 +2538,7 @@ async function renderProjectRegister(main, projectId, kind) {
     return;
   }
 
-  const colCount = config.hasDecisionField ? 6 : 5;
+  const colCount = config.extraField ? 6 : 5;
   const rowsHtml = entries.length === 0
     ? emptyStateRowHtml(`No ${config.itemLabel.toLowerCase()}s logged yet.`, colCount)
     : entries.map(e => `
@@ -2545,7 +2551,7 @@ async function renderProjectRegister(main, projectId, kind) {
               ${config.statuses.map(s => `<option value="${escapeHtml(s)}" ${s === e.status ? 'selected' : ''}>${escapeHtml(s)}</option>`).join('')}
             </select>
           </td>
-          ${config.hasDecisionField ? `<td>${e.decision ? escapeHtml(e.decision) : '<span class="hint">—</span>'}</td>` : ''}
+          ${config.extraField ? `<td>${e[config.extraField.key] ? escapeHtml(e[config.extraField.key]) : '<span class="hint">—</span>'}</td>` : ''}
           <td><button type="button" class="btn small secondary" data-register-edit="${e.id}">Edit</button></td>
         </tr>
       `).join('');
@@ -2562,7 +2568,7 @@ async function renderProjectRegister(main, projectId, kind) {
         <thead>
           <tr>
             <th>Description</th><th>Date Raised</th><th>Raised By</th><th>Status</th>
-            ${config.hasDecisionField ? '<th>Decision</th>' : ''}
+            ${config.extraField ? `<th>${escapeHtml(config.extraField.label)}</th>` : ''}
             <th></th>
           </tr>
         </thead>
@@ -2633,7 +2639,7 @@ function showRegisterEditModal(main, projectId, kind, entry, onUpdated) {
         <h2>Edit ${config.itemLabel}</h2>
         <form id="register-edit-form">
           <div><label>Description</label><textarea name="description" required>${escapeHtml(entry.description)}</textarea></div>
-          ${config.hasDecisionField ? `<div><label>Decision</label><textarea name="decision" placeholder="What was decided?">${escapeHtml(entry.decision || '')}</textarea></div>` : ''}
+          ${config.extraField ? `<div><label>${escapeHtml(config.extraField.label)}</label><textarea name="extra" placeholder="${escapeHtml(config.extraField.placeholder)}">${escapeHtml(entry[config.extraField.key] || '')}</textarea></div>` : ''}
           <div id="register-modal-error" class="error-text"></div>
           <button class="btn" type="submit">Save</button>
         </form>
@@ -2652,7 +2658,7 @@ function showRegisterEditModal(main, projectId, kind, entry, onUpdated) {
     const errBox = document.getElementById('register-modal-error');
     errBox.textContent = '';
     const body = { description: form.description.value };
-    if (config.hasDecisionField) body.decision = form.decision.value;
+    if (config.extraField) body[config.extraField.key] = form.extra.value;
     try {
       await api('/' + kind + '/' + entry.id, { method: 'PATCH', body: JSON.stringify(body) });
       close();
@@ -2732,6 +2738,64 @@ async function renderTeam(main) {
       errBox.textContent = err.message;
     }
   });
+}
+
+// ---------------- AUDIT LOG (admin) ----------------
+// Read-only by design on this side too — there is no edit or delete control
+// anywhere on this page, matching the fact that the API has none either.
+
+async function renderAuditLog(main) {
+  if (!state.auditLogFilters) state.auditLogFilters = { startDate: '', endDate: '' };
+  const filters = state.auditLogFilters;
+
+  main.innerHTML = `<h1>Audit Log</h1><p class="subtitle">Loading…</p>`;
+  let result;
+  try {
+    const params = new URLSearchParams();
+    if (filters.startDate) params.set('startDate', filters.startDate);
+    if (filters.endDate) params.set('endDate', filters.endDate);
+    result = await api('/audit-log?' + params.toString());
+  } catch (e) {
+    main.innerHTML = `<h1>Audit Log</h1><p class="error-text">${escapeHtml(e.message)}</p>`;
+    return;
+  }
+
+  const { entries, total, shown } = result;
+  const rowsHtml = entries.length === 0
+    ? emptyStateRowHtml('No audit entries in this range yet.', 5)
+    : entries.map(e => `
+        <tr>
+          <td>${formatDateTime(e.timestamp)}</td>
+          <td>${escapeHtml(e.userName || 'Unknown')}</td>
+          <td>${escapeHtml(e.action)}</td>
+          <td>${e.entityLabel ? escapeHtml(e.entityLabel) : '<span class="hint">—</span>'}</td>
+          <td>${e.projectName ? escapeHtml(e.projectName) : '<span class="hint">—</span>'}</td>
+        </tr>
+      `).join('');
+
+  main.innerHTML = `
+    <h1>Audit Log</h1>
+    <p class="subtitle">Every meaningful change made in the app — write-only, nothing here can be edited or deleted.</p>
+    <div class="task-filter-bar">
+      <label class="task-filter-overdue-label">From <input type="date" id="audit-start-date" value="${escapeHtml(filters.startDate)}" /></label>
+      <label class="task-filter-overdue-label">To <input type="date" id="audit-end-date" value="${escapeHtml(filters.endDate)}" /></label>
+      ${(filters.startDate || filters.endDate) ? `<button type="button" class="btn small secondary" id="audit-clear-filter">Clear filter</button>` : ''}
+    </div>
+    <div class="card">
+      <p class="hint">Showing ${shown} of ${total} entr${total === 1 ? 'y' : 'ies'}${shown < total ? ` (most recent ${shown} — narrow the date range to see older ones)` : ''}.</p>
+      <table>
+        <thead><tr><th>When</th><th>Who</th><th>What Changed</th><th>Record</th><th>Project</th></tr></thead>
+        <tbody>${rowsHtml}</tbody>
+      </table>
+    </div>
+  `;
+
+  const startInput = main.querySelector('#audit-start-date');
+  const endInput = main.querySelector('#audit-end-date');
+  startInput.addEventListener('change', () => { filters.startDate = startInput.value; renderAuditLog(main); });
+  endInput.addEventListener('change', () => { filters.endDate = endInput.value; renderAuditLog(main); });
+  const clearBtn = main.querySelector('#audit-clear-filter');
+  if (clearBtn) clearBtn.addEventListener('click', () => { filters.startDate = ''; filters.endDate = ''; renderAuditLog(main); });
 }
 
 // ---------------- ADMIN SETTINGS (editable option lists) ----------------
