@@ -16,6 +16,22 @@ const state = {
 
 const root = document.getElementById('app');
 
+// Every view builds its markup (including any <table>) via innerHTML, from
+// dozens of call sites across this file — rather than touching each one, a
+// single observer wraps any new table in a horizontally-scrollable div as
+// soon as it's inserted, so a table wider than its card scrolls on a phone
+// screen instead of overflowing the page. See .table-scroll in styles.css.
+function wrapTablesForMobileScroll(container) {
+  container.querySelectorAll('table').forEach(table => {
+    if (table.parentElement && table.parentElement.classList.contains('table-scroll')) return;
+    const wrapper = document.createElement('div');
+    wrapper.className = 'table-scroll';
+    table.parentNode.insertBefore(wrapper, table);
+    wrapper.appendChild(table);
+  });
+}
+new MutationObserver(() => wrapTablesForMobileScroll(root)).observe(root, { childList: true, subtree: true });
+
 function requireGate() {
   state.gateToken = null;
   localStorage.removeItem('civilpm_gate_token');
@@ -722,7 +738,14 @@ function renderShell() {
 
   return `
     <div class="app-shell">
-      <aside class="sidebar">
+      <div class="mobile-topbar">
+        <button class="mobile-nav-toggle" id="mobile-nav-toggle" type="button" aria-label="Open menu">
+          <svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+        </button>
+        <div class="mobile-topbar-brand"><span class="brand-mark">CP</span>Civil PM</div>
+      </div>
+      <div class="sidebar-backdrop" id="sidebar-backdrop"></div>
+      <aside class="sidebar" id="sidebar">
         <div class="sidebar-brand"><span class="brand-mark">CP</span>Civil <span>PM</span></div>
         <nav class="sidebar-nav">${navHtml}</nav>
         <div class="sidebar-footer">
@@ -742,8 +765,20 @@ function renderShell() {
 }
 
 function bindShell() {
+  const sidebar = root.querySelector('#sidebar');
+  const backdrop = root.querySelector('#sidebar-backdrop');
+  const navToggle = root.querySelector('#mobile-nav-toggle');
+  const closeMobileNav = () => { sidebar.classList.remove('open'); backdrop.classList.remove('open'); };
+  if (navToggle) {
+    navToggle.addEventListener('click', () => {
+      sidebar.classList.toggle('open');
+      backdrop.classList.toggle('open');
+    });
+  }
+  if (backdrop) backdrop.addEventListener('click', closeMobileNav);
+
   root.querySelectorAll('[data-nav]').forEach(el => {
-    el.addEventListener('click', () => setView(el.dataset.nav));
+    el.addEventListener('click', () => { closeMobileNav(); setView(el.dataset.nav); });
   });
   root.querySelector('#switch-user').addEventListener('click', logout);
 

@@ -187,6 +187,12 @@ body {
 }
 .sidebar-footer .switch:hover { text-decoration: underline; }
 
+/* Hidden on desktop; the sidebar is always visible there. Shown only under
+   the mobile breakpoint below, where the sidebar becomes an off-canvas
+   drawer and this bar is what triggers it. */
+.mobile-topbar { display: none; }
+.sidebar-backdrop { display: none; }
+
 .main-content {
   flex: 1;
   min-width: 0;
@@ -343,6 +349,13 @@ button.btn.small { padding: 0.35rem 0.75rem; font-size: 0.8rem; }
 .hint { color: var(--text-muted); font-size: 0.8rem; }
 
 /* ============ TABLES ============ */
+
+/* Every <table> in the app gets wrapped in this at render time (see
+   wrapTablesForMobileScroll in app.js) so a table that's wider than its
+   card — the common case on a phone screen — scrolls horizontally inside
+   its own box instead of overflowing the page or getting squeezed
+   unreadable. Applies uniformly without needing per-table markup. */
+.table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
 
 table { width: 100%; border-collapse: collapse; font-size: 0.88rem; }
 th, td { text-align: left; padding: 0.65rem 0.7rem; border-bottom: 1px solid var(--border); }
@@ -1003,6 +1016,104 @@ body.gantt-dragging { user-select: none; }
 
 .card, .stat-card, .project-card, .board-card, .rfi-card, .user-pick, .modal-card {
   animation: fadeSlideIn 0.28s ease;
+}
+
+/* ============ RESPONSIVE / MOBILE ============ */
+
+/* Below this width the fixed 244px sidebar would eat most of the screen,
+   so it becomes an off-canvas drawer (hidden by default, slid in on top of
+   everything via the hamburger button in .mobile-topbar) instead of a
+   permanent column. This is the single biggest fix for phone layouts here:
+   almost everything else on narrow screens was being squeezed into
+   whatever sliver of width the sidebar left behind. */
+@media (max-width: 768px) {
+  .mobile-topbar {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    position: sticky;
+    top: 0;
+    z-index: 900;
+    background: var(--card);
+    border-bottom: 1px solid var(--border);
+    padding: 0.7rem 1rem;
+  }
+  .mobile-nav-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: none;
+    border: none;
+    padding: 0.3rem;
+    cursor: pointer;
+    color: var(--text);
+    flex-shrink: 0;
+  }
+  .mobile-nav-toggle svg {
+    width: 22px;
+    height: 22px;
+    stroke: currentColor;
+    fill: none;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+  .mobile-topbar-brand { display: flex; align-items: center; gap: 0.5rem; font-weight: 800; font-size: 1.05rem; color: var(--primary); }
+  .mobile-topbar-brand .brand-mark {
+    width: 26px; height: 26px; border-radius: 7px; background: var(--primary); color: white;
+    display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 0.78rem; flex-shrink: 0;
+  }
+
+  .sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    height: 100vh;
+    width: 82vw;
+    max-width: 300px;
+    transform: translateX(-100%);
+    transition: transform 0.22s ease;
+    z-index: 1200;
+    box-shadow: none;
+  }
+  .sidebar.open { transform: translateX(0); box-shadow: var(--shadow-lg); }
+
+  .sidebar-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(15, 23, 42, 0.5);
+    z-index: 1100;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.2s ease;
+  }
+  .sidebar-backdrop.open { opacity: 1; pointer-events: auto; }
+
+  .main-content { padding: 1.1rem 1rem 2rem; }
+}
+
+/* Phone-width tuning (roughly 375-430px and below): fields that sit two to
+   a row everywhere else (date pairs, color+progress, etc.) stack to a
+   single column instead, since two inputs squeezed side by side on a
+   phone get too narrow to use comfortably. */
+@media (max-width: 600px) {
+  .main-content { padding: 0.9rem 0.75rem 1.75rem; }
+
+  .form-row { flex-direction: column; gap: 0.8rem; }
+  .modal-dates { flex-direction: column; gap: 0.7rem; }
+
+  .modal-card { padding: 1.2rem; max-height: 90vh; }
+  .modal-actions { flex-wrap: wrap; }
+
+  .dash-toggle { flex-wrap: wrap; }
+  .dash-toggle .btn { flex: 1 1 auto; }
+
+  .login-wrap { padding: 1rem; }
+  .login-card { padding: 1.5rem; }
+
+  .card { padding: 1.1rem; }
 }
 
 @media (prefers-reduced-motion: reduce) {
