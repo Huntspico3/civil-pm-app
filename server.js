@@ -720,6 +720,7 @@ app.patch('/api/tasks/:id', requireAuth, (req, res) => {
   if (status !== undefined) {
     if (!data.taskStatuses.includes(status)) return res.status(400).json({ error: 'Invalid status' });
     const doneStatus = data.taskStatuses[data.taskStatuses.length - 1];
+    const statusChanged = task.status !== status;
     if (status === doneStatus && task.status !== doneStatus) {
       task.completedAt = new Date().toISOString();
     } else if (status !== doneStatus) {
@@ -728,6 +729,17 @@ app.patch('/api/tasks/:id', requireAuth, (req, res) => {
     }
     task.status = status;
     changes.push(`status set to "${status}"`);
+    // Moving to a new status resets progress to a sensible default for that
+    // stage (e.g. To Do -> 0%, Done -> 100%, evenly spread in between) so it
+    // doesn't sit at a stale percentage from the old status — unless this
+    // same request also explicitly sets progress, which takes precedence.
+    if (statusChanged && progress === undefined) {
+      const defaultProgress = db.defaultProgressForStatus(status, data.taskStatuses);
+      if (defaultProgress !== task.progress) {
+        task.progress = defaultProgress;
+        changes.push(`progress auto-set to ${defaultProgress}% for new status`);
+      }
+    }
   }
   if (progress !== undefined) {
     if (typeof progress !== 'number' || progress < 0 || progress > 100) {

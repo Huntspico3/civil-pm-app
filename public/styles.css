@@ -662,9 +662,33 @@ body.gantt-dragging { user-select: none; }
   border: 1px solid var(--border);
   overflow: hidden;
 }
-.task-progress-bar-editable { cursor: pointer; }
+.task-progress-bar-editable { cursor: pointer; touch-action: none; }
 .task-progress-bar-editable:hover { border-color: var(--border-strong); }
 .task-progress-bar-lg { height: 22px; }
+
+/* +/-10% buttons flanking an editable progress bar — a real tap target
+   (unlike pixel-precise dragging) so nudging a task's progress by a clean
+   amount takes one tap, on touch or desktop alike. */
+.progress-step-btn {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 1px solid var(--border-strong);
+  background: var(--card);
+  color: var(--text);
+  font-size: 1rem;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+.progress-step-btn:hover { background: var(--primary-light); border-color: var(--primary); color: var(--primary); }
+.progress-step-btn:active { transform: scale(0.92); }
 
 .task-progress-bar-fill {
   position: absolute;

@@ -209,20 +209,35 @@ function progressColor(pct) {
 function taskProgressBarHtml(task, editable, size) {
   const progress = task.progress || 0;
   const sizeClass = size === 'lg' ? ' task-progress-bar-lg' : '';
+  const stepBtn = (step, label) => `<button type="button" class="progress-step-btn" data-progress-step="${step}" data-progress-task="${task.id}" aria-label="${label}">${step < 0 ? '−' : '+'}</button>`;
   return `
     <div class="task-progress-row">
+      ${editable ? stepBtn(-10, 'Decrease progress by 10%') : ''}
       <div class="task-progress-bar${sizeClass}${editable ? ' task-progress-bar-editable' : ''}" data-progress-task="${task.id}" data-editable="${editable}" draggable="false">
         <div class="task-progress-bar-fill" style="width:${progress}%; background:${progressColor(progress)};"></div>
       </div>
+      ${editable ? stepBtn(10, 'Increase progress by 10%') : ''}
       <span class="task-progress-label" data-progress-label="${task.id}">${progress}%</span>
     </div>
   `;
 }
 
-// Wires up click/drag-to-set on every editable progress bar found inside
+// Wires up tap/drag-to-set (snapped to the nearest 10%, so landing on a
+// clean value takes one tap rather than pixel-precise dragging) plus the
+// +/-10% stepper buttons, on every editable progress bar found inside
 // `container`. `onUpdated(taskId)` is called after a successful save so the
 // caller can refresh whatever else depends on it (e.g. re-render the board).
 function bindTaskProgressBars(container, onUpdated) {
+  async function commit(taskId, value, onDone) {
+    try {
+      await api('/tasks/' + taskId, { method: 'PATCH', body: JSON.stringify({ progress: value }) });
+    } catch (err) {
+      alert(err.message);
+    }
+    if (onDone) onDone();
+    if (onUpdated) onUpdated(taskId);
+  }
+
   container.querySelectorAll('.task-progress-bar-editable').forEach(bar => {
     const taskId = bar.dataset.progressTask;
     const fillEl = bar.querySelector('.task-progress-bar-fill');
@@ -230,7 +245,8 @@ function bindTaskProgressBars(container, onUpdated) {
 
     function computeProgress(clientX, rect) {
       const relativeX = clientX - rect.left;
-      return Math.max(0, Math.min(100, Math.round((relativeX / rect.width) * 100)));
+      const raw = Math.max(0, Math.min(100, (relativeX / rect.width) * 100));
+      return Math.round(raw / 10) * 10;
     }
 
     function applyVisual(value) {
@@ -255,19 +271,53 @@ function bindTaskProgressBars(container, onUpdated) {
         value = computeProgress(ev.clientX, rect);
         applyVisual(value);
       }
-      async function onUp() {
+      function onUp() {
         document.removeEventListener('mousemove', onMove);
         document.removeEventListener('mouseup', onUp);
-        try {
-          await api('/tasks/' + taskId, { method: 'PATCH', body: JSON.stringify({ progress: value }) });
-          if (onUpdated) onUpdated(taskId);
-        } catch (err) {
-          alert(err.message);
-          if (onUpdated) onUpdated(taskId);
-        }
+        commit(taskId, value);
       }
       document.addEventListener('mousemove', onMove);
       document.addEventListener('mouseup', onUp);
+    });
+
+    // Touch doesn't reliably synthesize mousemove for a drag gesture, so a
+    // tap or drag on a touchscreen is handled on its own touch events rather
+    // than relying on the mouse handlers above to pick it up.
+    bar.addEventListener('touchstart', (e) => {
+      e.stopPropagation();
+      const rect = bar.getBoundingClientRect();
+      let value = computeProgress(e.touches[0].clientX, rect);
+      applyVisual(value);
+
+      function onMove(ev) {
+        value = computeProgress(ev.touches[0].clientX, rect);
+        applyVisual(value);
+      }
+      function onEnd() {
+        bar.removeEventListener('touchmove', onMove);
+        bar.removeEventListener('touchend', onEnd);
+        bar.removeEventListener('touchcancel', onEnd);
+        commit(taskId, value);
+      }
+      bar.addEventListener('touchmove', onMove, { passive: true });
+      bar.addEventListener('touchend', onEnd);
+      bar.addEventListener('touchcancel', onEnd);
+    }, { passive: true });
+  });
+
+  container.querySelectorAll('.progress-step-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const taskId = btn.dataset.progressTask;
+      const labelEl = container.querySelector(`[data-progress-label="${taskId}"]`);
+      const bar = container.querySelector(`.task-progress-bar-editable[data-progress-task="${taskId}"]`);
+      const fillEl = bar ? bar.querySelector('.task-progress-bar-fill') : null;
+      const current = labelEl ? parseInt(labelEl.textContent, 10) || 0 : 0;
+      const value = Math.max(0, Math.min(100, current + Number(btn.dataset.progressStep)));
+      if (fillEl) fillEl.style.width = value + '%';
+      if (fillEl) fillEl.style.background = progressColor(value);
+      if (labelEl) labelEl.textContent = value + '%';
+      commit(taskId, value);
     });
   });
 }

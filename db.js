@@ -25,6 +25,18 @@ const DEFAULT_STAGES = ['Planning', 'Design', 'Approval', 'Construction', 'Compl
 const DEFAULT_TASK_STATUSES = ['To Do', 'In Progress', 'Review', 'Done'];
 const DEFAULT_EXTERNAL_CONTACT_CATEGORIES = ['Subcontractor', 'Structural Consultant', 'Local Authority', 'Quantity Surveyor', 'Client Representative', 'Consultant', 'Supplier'];
 
+// A sensible starting % complete for a task sitting in a given status,
+// spread evenly across however many statuses exist (e.g. with the 4 default
+// statuses: To Do=0%, In Progress=33%, Review=67%, Done=100%) so moving a
+// task to a new column starts it from something reasonable rather than 0 or
+// whatever it was before. Used both to backfill tasks that predate per-task
+// progress and, in server.js, to re-default progress on a status change.
+function defaultProgressForStatus(status, taskStatuses) {
+  const statusCount = taskStatuses.length;
+  const index = taskStatuses.indexOf(status);
+  return statusCount > 1 && index >= 0 ? Math.round((index / (statusCount - 1)) * 100) : 0;
+}
+
 // Default palette for new projects' Gantt bars — cycled by creation order so
 // consecutive projects get visually distinct colors out of the box. Admins can
 // override any project's color individually via the Portfolio Timeline.
@@ -273,11 +285,9 @@ function backfillSchema(data) {
   // a 4-column board defaults to 100%, "To Do" to 0%) as a reasonable
   // starting point — the assignee can then fine-tune the real number.
   if (Array.isArray(data.tasks)) {
-    const statusCount = data.taskStatuses.length;
     data.tasks.forEach(t => {
       if (typeof t.progress !== 'number') {
-        const index = data.taskStatuses.indexOf(t.status);
-        t.progress = statusCount > 1 && index >= 0 ? Math.round((index / (statusCount - 1)) * 100) : 0;
+        t.progress = defaultProgressForStatus(t.status, data.taskStatuses);
         changed = true;
       }
       // Tasks created before due dates existed simply don't have one yet —
@@ -342,7 +352,7 @@ function nextId(kind) {
 }
 
 module.exports = {
-  load, save, nextId,
+  load, save, nextId, defaultProgressForStatus,
   DEFAULT_ROLES, DEFAULT_STAGES, DEFAULT_TASK_STATUSES, DEFAULT_EXTERNAL_CONTACT_CATEGORIES,
   PROJECT_COLOR_PALETTE, DATA_DIR
 };
