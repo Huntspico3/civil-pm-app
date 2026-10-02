@@ -225,17 +225,20 @@ function taskProgressBarHtml(task, editable, size) {
 // Wires up tap/drag-to-set (snapped to the nearest 10%, so landing on a
 // clean value takes one tap rather than pixel-precise dragging) plus the
 // +/-10% stepper buttons, on every editable progress bar found inside
-// `container`. `onUpdated(taskId)` is called after a successful save so the
-// caller can refresh whatever else depends on it (e.g. re-render the board).
-function bindTaskProgressBars(container, onUpdated) {
-  async function commit(taskId, value, onDone) {
+// `container`. A commit only patches the value and updates this one bar's
+// own DOM in place — it deliberately never triggers a page/board/modal
+// refresh, since that used to mean a full re-render (or, for the task
+// modal, closing it outright) on every single tap, which looked like the
+// page jumping or navigating away. On failure, the visual reverts to
+// whatever it was before this gesture started.
+function bindTaskProgressBars(container) {
+  async function commit(taskId, value, revert) {
     try {
       await api('/tasks/' + taskId, { method: 'PATCH', body: JSON.stringify({ progress: value }) });
     } catch (err) {
       alert(err.message);
+      if (revert) revert();
     }
-    if (onDone) onDone();
-    if (onUpdated) onUpdated(taskId);
   }
 
   container.querySelectorAll('.task-progress-bar-editable').forEach(bar => {
@@ -264,6 +267,7 @@ function bindTaskProgressBars(container, onUpdated) {
       e.preventDefault();
       e.stopPropagation();
       const rect = bar.getBoundingClientRect();
+      const startValue = parseInt((labelEl && labelEl.textContent) || '0', 10) || 0;
       let value = computeProgress(e.clientX, rect);
       applyVisual(value);
 
@@ -274,7 +278,7 @@ function bindTaskProgressBars(container, onUpdated) {
       function onUp() {
         document.removeEventListener('mousemove', onMove);
         document.removeEventListener('mouseup', onUp);
-        commit(taskId, value);
+        commit(taskId, value, () => applyVisual(startValue));
       }
       document.addEventListener('mousemove', onMove);
       document.addEventListener('mouseup', onUp);
@@ -286,6 +290,7 @@ function bindTaskProgressBars(container, onUpdated) {
     bar.addEventListener('touchstart', (e) => {
       e.stopPropagation();
       const rect = bar.getBoundingClientRect();
+      const startValue = parseInt((labelEl && labelEl.textContent) || '0', 10) || 0;
       let value = computeProgress(e.touches[0].clientX, rect);
       applyVisual(value);
 
@@ -297,7 +302,7 @@ function bindTaskProgressBars(container, onUpdated) {
         bar.removeEventListener('touchmove', onMove);
         bar.removeEventListener('touchend', onEnd);
         bar.removeEventListener('touchcancel', onEnd);
-        commit(taskId, value);
+        commit(taskId, value, () => applyVisual(startValue));
       }
       bar.addEventListener('touchmove', onMove, { passive: true });
       bar.addEventListener('touchend', onEnd);
@@ -307,17 +312,20 @@ function bindTaskProgressBars(container, onUpdated) {
 
   container.querySelectorAll('.progress-step-btn').forEach(btn => {
     btn.addEventListener('click', (e) => {
+      e.preventDefault();
       e.stopPropagation();
       const taskId = btn.dataset.progressTask;
       const labelEl = container.querySelector(`[data-progress-label="${taskId}"]`);
       const bar = container.querySelector(`.task-progress-bar-editable[data-progress-task="${taskId}"]`);
       const fillEl = bar ? bar.querySelector('.task-progress-bar-fill') : null;
+      const setVisual = (v) => {
+        if (fillEl) { fillEl.style.width = v + '%'; fillEl.style.background = progressColor(v); }
+        if (labelEl) labelEl.textContent = v + '%';
+      };
       const current = labelEl ? parseInt(labelEl.textContent, 10) || 0 : 0;
       const value = Math.max(0, Math.min(100, current + Number(btn.dataset.progressStep)));
-      if (fillEl) fillEl.style.width = value + '%';
-      if (fillEl) fillEl.style.background = progressColor(value);
-      if (labelEl) labelEl.textContent = value + '%';
-      commit(taskId, value);
+      setVisual(value);
+      commit(taskId, value, () => setVisual(current));
     });
   });
 }
@@ -1829,7 +1837,7 @@ async function renderProjectBoard(main, projectId) {
     });
   });
 
-  bindTaskProgressBars(main, () => renderProjectBoard(main, projectId));
+  bindTaskProgressBars(main);
 }
 
 // Opens the shared task-detail modal for any task list this app has (Task
@@ -1993,7 +2001,7 @@ function showTaskModal(main, task, onUpdated) {
       }
     });
   }
-  bindTaskProgressBars(modalRoot, refresh);
+  bindTaskProgressBars(modalRoot);
 }
 
 // Renders the comment thread + "add a comment" form into the task modal's
