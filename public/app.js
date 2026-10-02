@@ -222,6 +222,18 @@ function taskProgressBarHtml(task, editable, size) {
   `;
 }
 
+// A status change auto-resets progress server-side (see defaultProgressForStatus
+// in db.js), so anywhere a status select patches itself in place rather than
+// doing a full re-render also needs to patch the matching progress bar/label
+// to match — this does that from the task object a PATCH response returns.
+function patchTaskProgressDisplay(container, task) {
+  const progress = task.progress || 0;
+  const bar = container.querySelector(`.task-progress-bar[data-progress-task="${task.id}"] .task-progress-bar-fill`);
+  if (bar) { bar.style.width = progress + '%'; bar.style.background = progressColor(progress); }
+  const label = container.querySelector(`[data-progress-label="${task.id}"]`);
+  if (label) label.textContent = progress + '%';
+}
+
 // Wires up tap/drag-to-set (snapped to the nearest 10%, so landing on a
 // clean value takes one tap rather than pixel-precise dragging) plus the
 // +/-10% stepper buttons, on every editable progress bar found inside
@@ -1443,11 +1455,11 @@ async function renderProjectDetail(main, projectId) {
             </td>
             <td><span class="badge role-${escapeHtml(t.requiredRole)}">${escapeHtml(t.requiredRole)}</span></td>
             <td>
-              <select class="select-inline" data-action="reassign" data-task="${t.id}">${assigneeOptionsForRole(t.requiredRole, t.assigneeId, !isManager)}</select>
+              <select class="select-inline" data-action="reassign" data-task="${t.id}" data-last-value="${t.assigneeId != null ? t.assigneeId : ''}">${assigneeOptionsForRole(t.requiredRole, t.assigneeId, !isManager)}</select>
             </td>
             <td>
               ${canChangeStatus
-                ? `<select class="select-inline" data-action="status" data-task="${t.id}">
+                ? `<select class="select-inline" data-action="status" data-task="${t.id}" data-last-value="${escapeHtml(t.status)}">
                     ${state.taskStatuses.map(s => `<option value="${escapeHtml(s)}" ${s === t.status ? 'selected' : ''}>${escapeHtml(s)}</option>`).join('')}
                   </select>`
                 : `<span class="status ${escapeHtml(statusClass(t.status, 'task'))}">${escapeHtml(t.status)}</span>`}
@@ -1560,6 +1572,12 @@ async function renderProjectDetail(main, projectId) {
     });
   }
 
+  // Both selects below patch themselves (and, for status, this row's
+  // progress bar) in place instead of re-rendering the whole page — a full
+  // re-render here used to flash the page to "Loading…" on every single
+  // selection, which looked like the page jumping/reloading. data-last-value
+  // tracks the last saved value so a failed save can revert the dropdown
+  // without needing a refetch.
   main.querySelectorAll('[data-action="reassign"]').forEach(el => {
     el.addEventListener('click', (e) => e.stopPropagation());
     el.addEventListener('change', async () => {
@@ -1568,10 +1586,10 @@ async function renderProjectDetail(main, projectId) {
           method: 'PATCH',
           body: JSON.stringify({ assigneeId: el.value ? Number(el.value) : null })
         });
-        renderProjectDetail(main, projectId);
+        el.dataset.lastValue = el.value;
       } catch (err) {
         alert(err.message);
-        renderProjectDetail(main, projectId);
+        el.value = el.dataset.lastValue || '';
       }
     });
   });
@@ -1580,14 +1598,15 @@ async function renderProjectDetail(main, projectId) {
     el.addEventListener('click', (e) => e.stopPropagation());
     el.addEventListener('change', async () => {
       try {
-        await api('/tasks/' + el.dataset.task, {
+        const updated = await api('/tasks/' + el.dataset.task, {
           method: 'PATCH',
           body: JSON.stringify({ status: el.value })
         });
-        renderProjectDetail(main, projectId);
+        el.dataset.lastValue = el.value;
+        patchTaskProgressDisplay(main, updated);
       } catch (err) {
         alert(err.message);
-        renderProjectDetail(main, projectId);
+        el.value = el.dataset.lastValue || '';
       }
     });
   });
@@ -1822,17 +1841,29 @@ async function renderProjectBoard(main, projectId) {
       column.classList.add('drag-over');
     });
     column.addEventListener('dragleave', () => column.classList.remove('drag-over'));
+    // Moves the dropped card straight into this column's DOM instead of
+    // re-fetching and re-rendering the whole board — the latter used to
+    // flash every column back to "Loading…" on every single drop.
     column.addEventListener('drop', async (e) => {
       e.preventDefault();
       column.classList.remove('drag-over');
       const taskId = Number(e.dataTransfer.getData('text/plain'));
       const newStatus = column.dataset.dropStatus;
+      const card = main.querySelector(`[data-task-card="${taskId}"]`);
+      const sourceBody = card ? card.closest('.board-column-body') : null;
       try {
-        await api('/tasks/' + taskId, { method: 'PATCH', body: JSON.stringify({ status: newStatus }) });
-        renderProjectBoard(main, projectId);
+        const updated = await api('/tasks/' + taskId, { method: 'PATCH', body: JSON.stringify({ status: newStatus }) });
+        if (card) {
+          column.appendChild(card);
+          patchTaskProgressDisplay(main, updated);
+        }
+        [sourceBody, column].forEach(body => {
+          if (!body) return;
+          const countEl = body.closest('.board-column').querySelector('.board-column-count');
+          if (countEl) countEl.textContent = String(body.children.length);
+        });
       } catch (err) {
         alert(err.message);
-        renderProjectBoard(main, projectId);
       }
     });
   });
@@ -1930,27 +1961,38 @@ function showTaskModal(main, task, onUpdated) {
     </div>
   `;
 
+  // Every field here used to save-then-immediately-close-and-refresh — so
+  // editing just one field (most commonly status) closed the modal and
+  // triggered a full board/list re-render on the spot, which looked exactly
+  // like the page jumping away. Saving a field now only patches that field's
+  // own bit of the modal and keeps it open; the underlying board/list only
+  // refreshes once, when the modal is actually dismissed, if anything in it
+  // actually changed.
+  let hasChanges = false;
   const overlay = document.getElementById('task-modal-overlay');
-  const close = () => { modalRoot.innerHTML = ''; };
+  const close = () => {
+    modalRoot.innerHTML = '';
+    if (hasChanges && onUpdated) onUpdated(taskId);
+  };
   document.getElementById('task-modal-close').addEventListener('click', close);
   overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
 
   renderTaskModalComments(modalRoot, task);
-
-  const refresh = () => { close(); if (onUpdated) onUpdated(taskId); };
 
   const errBox = document.getElementById('task-modal-error');
   const assigneeSelect = document.getElementById('task-modal-assignee');
   if (assigneeSelect) {
     assigneeSelect.addEventListener('change', async () => {
       try {
-        await api('/tasks/' + taskId, {
+        const updated = await api('/tasks/' + taskId, {
           method: 'PATCH',
           body: JSON.stringify({ assigneeId: assigneeSelect.value ? Number(assigneeSelect.value) : null })
         });
-        refresh();
+        task.assigneeId = updated.assigneeId;
+        hasChanges = true;
       } catch (err) {
         errBox.textContent = err.message;
+        assigneeSelect.value = task.assigneeId != null ? task.assigneeId : '';
       }
     });
   }
@@ -1958,10 +2000,15 @@ function showTaskModal(main, task, onUpdated) {
   if (statusSelect) {
     statusSelect.addEventListener('change', async () => {
       try {
-        await api('/tasks/' + taskId, { method: 'PATCH', body: JSON.stringify({ status: statusSelect.value }) });
-        refresh();
+        const updated = await api('/tasks/' + taskId, { method: 'PATCH', body: JSON.stringify({ status: statusSelect.value }) });
+        task.status = updated.status;
+        task.progress = updated.progress;
+        task.completedAt = updated.completedAt;
+        patchTaskProgressDisplay(modalRoot, updated);
+        hasChanges = true;
       } catch (err) {
         errBox.textContent = err.message;
+        statusSelect.value = task.status;
       }
     });
   }
@@ -1969,10 +2016,12 @@ function showTaskModal(main, task, onUpdated) {
   if (startDateInput) {
     startDateInput.addEventListener('change', async () => {
       try {
-        await api('/tasks/' + taskId, { method: 'PATCH', body: JSON.stringify({ startDate: startDateInput.value || null }) });
-        refresh();
+        const updated = await api('/tasks/' + taskId, { method: 'PATCH', body: JSON.stringify({ startDate: startDateInput.value || null }) });
+        task.startDate = updated.startDate;
+        hasChanges = true;
       } catch (err) {
         errBox.textContent = err.message;
+        startDateInput.value = task.startDate || '';
       }
     });
   }
@@ -1980,10 +2029,12 @@ function showTaskModal(main, task, onUpdated) {
   if (dueDateInput) {
     dueDateInput.addEventListener('change', async () => {
       try {
-        await api('/tasks/' + taskId, { method: 'PATCH', body: JSON.stringify({ dueDate: dueDateInput.value || null }) });
-        refresh();
+        const updated = await api('/tasks/' + taskId, { method: 'PATCH', body: JSON.stringify({ dueDate: dueDateInput.value || null }) });
+        task.dueDate = updated.dueDate;
+        hasChanges = true;
       } catch (err) {
         errBox.textContent = err.message;
+        dueDateInput.value = task.dueDate || '';
       }
     });
   }
@@ -1993,10 +2044,12 @@ function showTaskModal(main, task, onUpdated) {
       const workDoneInput = document.getElementById('task-modal-work-done');
       workDoneSaveBtn.disabled = true;
       try {
-        await api('/tasks/' + taskId, { method: 'PATCH', body: JSON.stringify({ workDone: workDoneInput.value }) });
-        refresh();
+        const updated = await api('/tasks/' + taskId, { method: 'PATCH', body: JSON.stringify({ workDone: workDoneInput.value }) });
+        task.workDone = updated.workDone;
+        hasChanges = true;
       } catch (err) {
         errBox.textContent = err.message;
+      } finally {
         workDoneSaveBtn.disabled = false;
       }
     });
@@ -2621,7 +2674,7 @@ async function showSnagDetailModal(main, projectId, snag, isManager, onUpdated) 
         <div id="snag-detail-error" class="error-text"></div>
 
         <h3>Status History</h3>
-        <ul class="modal-team-list">
+        <ul class="modal-team-list" id="snag-status-history">
           ${snag.statusHistory.slice().reverse().map(h => `
             <li>
               <span class="status ${escapeHtml(statusClass(h.status, 'snag'))}">${escapeHtml(h.status)}</span>
@@ -2633,8 +2686,16 @@ async function showSnagDetailModal(main, projectId, snag, isManager, onUpdated) 
     </div>
   `;
 
+  // As with the task modal, a field save here used to close this modal and
+  // immediately re-render the snag list behind it — so this only patches
+  // the modal's own content in place and defers that list refresh until the
+  // modal is actually closed, and only if something actually changed.
+  let hasChanges = false;
   const overlay = document.getElementById('snag-detail-overlay');
-  const close = () => { modalRoot.innerHTML = ''; };
+  const close = () => {
+    modalRoot.innerHTML = '';
+    if (hasChanges && onUpdated) onUpdated();
+  };
   document.getElementById('snag-detail-close').addEventListener('click', close);
   overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
 
@@ -2650,17 +2711,28 @@ async function showSnagDetailModal(main, projectId, snag, isManager, onUpdated) 
     })
     .catch(() => { photoWrap.innerHTML = '<p class="error-text">Could not load the photo.</p>'; });
 
-  const refresh = () => { close(); if (onUpdated) onUpdated(); };
   const errBox = document.getElementById('snag-detail-error');
 
   const statusSelect = document.getElementById('snag-detail-status');
   if (statusSelect) {
     statusSelect.addEventListener('change', async () => {
       try {
-        await api('/snags/' + snag.id, { method: 'PATCH', body: JSON.stringify({ status: statusSelect.value }) });
-        refresh();
+        const updated = await api('/snags/' + snag.id, { method: 'PATCH', body: JSON.stringify({ status: statusSelect.value }) });
+        snag.status = updated.status;
+        snag.statusHistory = updated.statusHistory;
+        const historyEl = document.getElementById('snag-status-history');
+        if (historyEl) {
+          historyEl.innerHTML = updated.statusHistory.slice().reverse().map(h => `
+            <li>
+              <span class="status ${escapeHtml(statusClass(h.status, 'snag'))}">${escapeHtml(h.status)}</span>
+              <span class="hint">${h.changedByUser ? escapeHtml(h.changedByUser.name) : 'Unknown'} &middot; ${formatDate(h.changedAt.slice(0, 10))}</span>
+            </li>
+          `).join('');
+        }
+        hasChanges = true;
       } catch (err) {
         errBox.textContent = err.message;
+        statusSelect.value = snag.status;
       }
     });
   }
@@ -2668,13 +2740,15 @@ async function showSnagDetailModal(main, projectId, snag, isManager, onUpdated) 
   if (assigneeSelect) {
     assigneeSelect.addEventListener('change', async () => {
       try {
-        await api('/snags/' + snag.id, {
+        const updated = await api('/snags/' + snag.id, {
           method: 'PATCH',
           body: JSON.stringify({ assigneeId: assigneeSelect.value ? Number(assigneeSelect.value) : null })
         });
-        refresh();
+        snag.assigneeId = updated.assigneeId;
+        hasChanges = true;
       } catch (err) {
         errBox.textContent = err.message;
+        assigneeSelect.value = snag.assigneeId != null ? snag.assigneeId : '';
       }
     });
   }
@@ -2715,7 +2789,7 @@ async function renderProjectRegister(main, projectId, kind) {
           <td>${formatDate(e.dateRaised)}</td>
           <td>${e.raisedByUser ? escapeHtml(e.raisedByUser.name) : 'Unknown'}</td>
           <td>
-            <select class="select-inline ${escapeHtml(statusClass(e.status, config.colorDomain))}" data-register-status="${e.id}">
+            <select class="select-inline ${escapeHtml(statusClass(e.status, config.colorDomain))}" data-register-status="${e.id}" data-last-value="${escapeHtml(e.status)}">
               ${config.statuses.map(s => `<option value="${escapeHtml(s)}" ${s === e.status ? 'selected' : ''}>${escapeHtml(s)}</option>`).join('')}
             </select>
           </td>
@@ -2760,13 +2834,17 @@ async function renderProjectRegister(main, projectId, kind) {
   bindProjectTabs(main, projectId);
 
   main.querySelectorAll('[data-register-status]').forEach(select => {
+    // Patches the select's own color tint in place instead of re-rendering
+    // the whole register (which used to flash to "Loading…" on every
+    // selection); data-last-value lets a failed save revert the dropdown.
     select.addEventListener('change', async () => {
       try {
-        await api('/' + kind + '/' + select.dataset.registerStatus, { method: 'PATCH', body: JSON.stringify({ status: select.value }) });
-        renderProjectRegister(main, projectId, kind);
+        const updated = await api('/' + kind + '/' + select.dataset.registerStatus, { method: 'PATCH', body: JSON.stringify({ status: select.value }) });
+        select.dataset.lastValue = updated.status;
+        select.className = 'select-inline ' + statusClass(updated.status, config.colorDomain);
       } catch (err) {
         alert(err.message);
-        renderProjectRegister(main, projectId, kind);
+        select.value = select.dataset.lastValue || '';
       }
     });
   });
@@ -3516,8 +3594,18 @@ function showProjectModal(project, boardMain) {
     </div>
   `;
 
+  // Same fix as the task/snag modals: a field edit here used to re-render
+  // the entire Portfolio Timeline immediately, which also wiped out this
+  // modal's own DOM (it lives inside the same innerHTML being replaced) out
+  // from under whoever was still using it. Edits now just save and update
+  // this modal's own state; the timeline behind it only refreshes once, when
+  // this modal is actually closed, and only if something changed.
+  let hasChanges = false;
   const overlay = document.getElementById('project-modal-overlay');
-  const close = () => { modalRoot.innerHTML = ''; };
+  const close = () => {
+    modalRoot.innerHTML = '';
+    if (hasChanges) renderPortfolio(boardMain);
+  };
   document.getElementById('project-modal-close').addEventListener('click', close);
   overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
 
@@ -3537,7 +3625,7 @@ function showProjectModal(project, boardMain) {
         });
         project.location = updated.location;
         loadWeatherInto(document.getElementById('project-modal-weather'), project.id, {});
-        renderPortfolio(boardMain);
+        hasChanges = true;
       } catch (err) {
         locErrBox.textContent = err.message;
       }
@@ -3553,7 +3641,7 @@ function showProjectModal(project, boardMain) {
       errBox.textContent = '';
       try {
         await api('/projects/' + project.id, { method: 'PATCH', body: JSON.stringify({ color: colorInput.value }) });
-        renderPortfolio(boardMain);
+        hasChanges = true;
       } catch (err) {
         errBox.textContent = err.message;
       }
@@ -3568,7 +3656,7 @@ function showProjectModal(project, boardMain) {
       }
       try {
         await api('/projects/' + project.id, { method: 'PATCH', body: JSON.stringify({ progress: value }) });
-        renderPortfolio(boardMain);
+        hasChanges = true;
       } catch (err) {
         errBox.textContent = err.message;
       }
@@ -3580,7 +3668,7 @@ function showProjectModal(project, boardMain) {
         errBox.textContent = '';
         try {
           await api('/projects/' + project.id, { method: 'PATCH', body: JSON.stringify({ progressMode: 'auto' }) });
-          renderPortfolio(boardMain);
+          hasChanges = true;
         } catch (err) {
           errBox.textContent = err.message;
         }
