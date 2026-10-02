@@ -62,8 +62,74 @@ async function authenticatedBlobUrl(url) {
   return URL.createObjectURL(blob);
 }
 
-function statusClass(status) {
-  return 'status-' + status.replace(/\s+/g, '-');
+// ---------------- STATUS COLOR SYSTEM (one shared, semantic palette) ----------------
+// Five meanings, used consistently everywhere a status/stage is shown,
+// regardless of which feature it's from: success (complete/done/low-risk/
+// on-track/decided), warning (in progress/pending/needs attention), danger
+// (blocked/high-risk/overdue/an open issue), info (not yet started/neutral),
+// neutral (closed/archived/not applicable). To add a new status anywhere,
+// extend one of the tables/rules below — never add a per-feature CSS rule;
+// the five .status-success/.status-warning/... classes in styles.css are
+// the only CSS this ever resolves to.
+
+// Small, fixed-enum domains get an explicit lookup — the same word can mean
+// different things in different domains (an "Open" RFI, where nothing's
+// wrong yet, is informational; an "Open" risk or snag, an active unresolved
+// problem, is a real warning sign), so each domain has its own table rather
+// than one shared dictionary that would collide on homonyms like that.
+const STATUS_COLOR_TABLES = {
+  rfi: { open: 'info', answered: 'success' },
+  risk: { open: 'danger', closed: 'neutral' },
+  decision: { pending: 'warning', decided: 'success' },
+  snag: { open: 'danger', 'in progress': 'warning', resolved: 'success' },
+  changeOrder: { pending: 'warning', approved: 'success', rejected: 'danger' }
+};
+
+// A generic fallback for anything not in a table above, so a future/unknown
+// status still gets a sensible color from its own wording instead of
+// falling through unstyled.
+function fallbackStatusColor(status) {
+  const s = String(status || '').toLowerCase();
+  if (/(done|complete|resolved|decided|approved|answered)/.test(s)) return 'success';
+  if (/(progress|pending|review|at risk)/.test(s)) return 'warning';
+  if (/(overdue|blocked|reject|behind|high)/.test(s)) return 'danger';
+  if (/(to ?do|open|new|planned)/.test(s)) return 'info';
+  return 'neutral';
+}
+
+// Task statuses and project stages are admin-editable ordered lists already
+// used elsewhere for their position (e.g. a backfilled task's progress is
+// estimated from where its status sits in this same list) — reusing that
+// same idea for color means a custom status/stage an admin adds later is
+// automatically colored sensibly too, with no table to update: first = not
+// started yet (info), last = complete (success), anything in between = in
+// progress (warning).
+function orderedListStatusColor(value, list) {
+  const index = list.indexOf(value);
+  if (index <= 0) return 'info';
+  if (index === list.length - 1) return 'success';
+  return 'warning';
+}
+
+// domain: 'task' | 'stage' | 'rfi' | 'risk' | 'decision' | 'snag' | 'changeOrder'
+function statusColorKey(status, domain) {
+  if (domain === 'task') return orderedListStatusColor(status, state.taskStatuses);
+  if (domain === 'stage') return orderedListStatusColor(status, state.stages);
+  const table = STATUS_COLOR_TABLES[domain];
+  const key = String(status || '').toLowerCase();
+  if (table && table[key]) return table[key];
+  return fallbackStatusColor(status);
+}
+
+// For .status pills (tinted-outline style) and the registers' live status
+// <select>, which is tinted the same way.
+function statusClass(status, domain) {
+  return 'status-' + statusColorKey(status, domain);
+}
+
+// For .badge elements (solid-fill style) — currently just project stages.
+function badgeColorClass(status, domain) {
+  return 'badge-' + statusColorKey(status, domain);
 }
 
 function escapeHtml(str) {
@@ -897,7 +963,7 @@ async function renderDashboard(main) {
                     <td>${projectLink(t.project)}</td>
                     <td><span class="badge role-${escapeHtml(t.requiredRole)}">${escapeHtml(t.requiredRole)}</span></td>
                     <td>${t.assignee ? escapeHtml(t.assignee.name) : '<span class="hint">Unassigned</span>'}</td>
-                    <td><span class="status ${escapeHtml(statusClass(t.status))}">${escapeHtml(t.status)}</span></td>
+                    <td><span class="status ${escapeHtml(statusClass(t.status, 'task'))}">${escapeHtml(t.status)}</span></td>
                   </tr>
                 `).join('')}
               </tbody>
@@ -1015,7 +1081,7 @@ async function renderMyTasks(main) {
               <td><strong>${escapeHtml(t.title)}</strong></td>
               <td>${t.project ? escapeHtml(t.project.name) : '—'}</td>
               <td><span class="badge role-${escapeHtml(t.requiredRole)}">${escapeHtml(t.requiredRole)}</span></td>
-              <td><span class="status ${escapeHtml(statusClass(t.status))}">${escapeHtml(t.status)}</span></td>
+              <td><span class="status ${escapeHtml(statusClass(t.status, 'task'))}">${escapeHtml(t.status)}</span></td>
               <td>${taskProgressBarHtml(t, false, 'sm')}</td>
               <td>${formatDate(t.startDate)}</td>
               <td>${formatDate(t.dueDate)}</td>
@@ -1079,7 +1145,7 @@ function projectCardsHtml(projects) {
       <h3>${escapeHtml(p.name)}</h3>
       <p>${escapeHtml(p.description || 'No description')}</p>
       <div class="meta">
-        <span class="badge stage-${escapeHtml(p.stage)}">${escapeHtml(p.stage)}</span>
+        <span class="badge ${escapeHtml(badgeColorClass(p.stage, 'stage'))}">${escapeHtml(p.stage)}</span>
         <span>${p.taskCount} task${p.taskCount === 1 ? '' : 's'}</span>
         <span>${p.myTaskCount} assigned to you</span>
       </div>
@@ -1282,7 +1348,7 @@ async function renderProjectDetail(main, projectId) {
                 ? `<select class="select-inline" data-action="status" data-task="${t.id}">
                     ${state.taskStatuses.map(s => `<option value="${escapeHtml(s)}" ${s === t.status ? 'selected' : ''}>${escapeHtml(s)}</option>`).join('')}
                   </select>`
-                : `<span class="status ${escapeHtml(statusClass(t.status))}">${escapeHtml(t.status)}</span>`}
+                : `<span class="status ${escapeHtml(statusClass(t.status, 'task'))}">${escapeHtml(t.status)}</span>`}
             </td>
             <td>${taskProgressBarHtml(t, false, 'sm')}</td>
             <td>${formatDate(t.startDate)}</td>
@@ -1606,7 +1672,7 @@ async function renderProjectBoard(main, projectId) {
     }).join('');
 
     return `
-      <div class="board-column" data-status-column="${escapeHtml(status)}">
+      <div class="board-column" data-status-column="${escapeHtml(status)}" style="border-top: 4px solid var(--${statusColorKey(status, 'task')});">
         <div class="board-column-header">
           <span>${escapeHtml(status)}</span>
           <span class="board-column-count">${columnTasks.length}</span>
@@ -1726,7 +1792,7 @@ function showTaskModal(main, task, onUpdated) {
             <label>Status</label>
             ${canChangeStatus
               ? `<select class="select-inline" id="task-modal-status">${state.taskStatuses.map(s => `<option value="${escapeHtml(s)}" ${s === task.status ? 'selected' : ''}>${escapeHtml(s)}</option>`).join('')}</select>`
-              : `<div><span class="status ${escapeHtml(statusClass(task.status))}">${escapeHtml(task.status)}</span></div>`}
+              : `<div><span class="status ${escapeHtml(statusClass(task.status, 'task'))}">${escapeHtml(task.status)}</span></div>`}
           </div>
         </div>
         <div class="form-row">
@@ -1930,7 +1996,7 @@ async function renderProjectRfis(main, projectId) {
             <div class="rfi-meta">
               <span>Assigned to <strong>${escapeHtml(r.assignee ? r.assignee.name : 'Unknown')}</strong></span>
               <span>Due ${formatDate(r.dueDate)}</span>
-              <span class="status ${escapeHtml(statusClass(r.status))}">${escapeHtml(r.status)}</span>
+              <span class="status ${escapeHtml(statusClass(r.status, 'rfi'))}">${escapeHtml(r.status)}</span>
               ${r.overdue ? '<span class="badge badge-overdue">Overdue</span>' : ''}
             </div>
             ${answerBlockHtml}
@@ -2219,7 +2285,7 @@ async function renderProjectSnags(main, projectId) {
           </div>
           <p class="snag-card-desc">${escapeHtml(s.description)}</p>
           <div class="meta">
-            <span class="status ${escapeHtml(statusClass(s.status))}">${escapeHtml(s.status)}</span>
+            <span class="status ${escapeHtml(statusClass(s.status, 'snag'))}">${escapeHtml(s.status)}</span>
             <span>${s.assignee ? escapeHtml(s.assignee.name) : 'Unassigned'}</span>
           </div>
         </div>
@@ -2437,7 +2503,7 @@ async function showSnagDetailModal(main, projectId, snag, isManager, onUpdated) 
             <label>Status</label>
             ${canEditStatus
               ? `<select class="select-inline" id="snag-detail-status">${SNAG_STATUSES.map(s => `<option value="${s}" ${s === snag.status ? 'selected' : ''}>${s}</option>`).join('')}</select>`
-              : `<div><span class="status ${escapeHtml(statusClass(snag.status))}">${escapeHtml(snag.status)}</span></div>`}
+              : `<div><span class="status ${escapeHtml(statusClass(snag.status, 'snag'))}">${escapeHtml(snag.status)}</span></div>`}
           </div>
           <div>
             <label>Assigned to</label>
@@ -2456,7 +2522,7 @@ async function showSnagDetailModal(main, projectId, snag, isManager, onUpdated) 
         <ul class="modal-team-list">
           ${snag.statusHistory.slice().reverse().map(h => `
             <li>
-              <span class="status ${escapeHtml(statusClass(h.status))}">${escapeHtml(h.status)}</span>
+              <span class="status ${escapeHtml(statusClass(h.status, 'snag'))}">${escapeHtml(h.status)}</span>
               <span class="hint">${h.changedByUser ? escapeHtml(h.changedByUser.name) : 'Unknown'} &middot; ${formatDate(h.changedAt.slice(0, 10))}</span>
             </li>
           `).join('')}
@@ -2520,9 +2586,9 @@ async function showSnagDetailModal(main, projectId, snag, isManager, onUpdated) 
 // who can already see the project can add or edit an entry in either.
 
 const REGISTER_CONFIG = {
-  risks: { tabKey: 'project-risks', heading: 'Risk Register', itemLabel: 'Risk', statuses: ['Open', 'Closed'], extraField: null },
-  decisions: { tabKey: 'project-decisions', heading: 'Decision Register', itemLabel: 'Decision', statuses: ['Pending', 'Decided'], extraField: { key: 'decision', label: 'Decision', placeholder: 'What was decided?' } },
-  'change-orders': { tabKey: 'project-change-orders', heading: 'Change Order Register', itemLabel: 'Change Order', statuses: ['Pending', 'Approved', 'Rejected'], extraField: { key: 'impact', label: 'Impact', placeholder: 'Cost/schedule impact (e.g. +$15,000, 2-week delay)' } }
+  risks: { tabKey: 'project-risks', heading: 'Risk Register', itemLabel: 'Risk', statuses: ['Open', 'Closed'], extraField: null, colorDomain: 'risk' },
+  decisions: { tabKey: 'project-decisions', heading: 'Decision Register', itemLabel: 'Decision', statuses: ['Pending', 'Decided'], extraField: { key: 'decision', label: 'Decision', placeholder: 'What was decided?' }, colorDomain: 'decision' },
+  'change-orders': { tabKey: 'project-change-orders', heading: 'Change Order Register', itemLabel: 'Change Order', statuses: ['Pending', 'Approved', 'Rejected'], extraField: { key: 'impact', label: 'Impact', placeholder: 'Cost/schedule impact (e.g. +$15,000, 2-week delay)' }, colorDomain: 'changeOrder' }
 };
 
 async function renderProjectRegister(main, projectId, kind) {
@@ -2547,7 +2613,7 @@ async function renderProjectRegister(main, projectId, kind) {
           <td>${formatDate(e.dateRaised)}</td>
           <td>${e.raisedByUser ? escapeHtml(e.raisedByUser.name) : 'Unknown'}</td>
           <td>
-            <select class="select-inline ${escapeHtml(statusClass(e.status))}" data-register-status="${e.id}">
+            <select class="select-inline ${escapeHtml(statusClass(e.status, config.colorDomain))}" data-register-status="${e.id}">
               ${config.statuses.map(s => `<option value="${escapeHtml(s)}" ${s === e.status ? 'selected' : ''}>${escapeHtml(s)}</option>`).join('')}
             </select>
           </td>
@@ -3053,7 +3119,7 @@ async function renderPortfolio(main) {
       <div class="gantt-row">
         <div class="gantt-label">
           <div>${escapeHtml(p.name)}</div>
-          <span class="badge stage-${escapeHtml(p.stage)}">${escapeHtml(p.stage)}</span>
+          <span class="badge ${escapeHtml(badgeColorClass(p.stage, 'stage'))}">${escapeHtml(p.stage)}</span>
           <div class="gantt-progress-track"><div class="gantt-progress-fill" style="width:${progress}%; background:${color};"></div></div>
           <span class="hint gantt-progress-pct">${progress}% complete</span>
           ${p.location ? `<div data-weather-for="${p.id}"></div>` : ''}
@@ -3328,7 +3394,7 @@ function showProjectModal(project, boardMain) {
       <div class="modal-card">
         <button class="modal-close" id="project-modal-close">&times;</button>
         <h2>${escapeHtml(project.name)}</h2>
-        <span class="badge stage-${escapeHtml(project.stage)}">${escapeHtml(project.stage)}</span>
+        <span class="badge ${escapeHtml(badgeColorClass(project.stage, 'stage'))}">${escapeHtml(project.stage)}</span>
         <p class="subtitle">${escapeHtml(project.description || '')}</p>
         <div class="modal-dates">
           <div><label>Start Date</label><div>${formatDate(project.startDate)}</div></div>

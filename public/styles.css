@@ -9,9 +9,12 @@
   --primary: #1e3a5f;
   --primary-dark: #142943;
   --primary-light: #e8eef5;
-  --accent-teal: #0d9488;
   --accent-amber: #d97706;
 
+  /* The app's one shared status-color system — five meanings, used
+     consistently everywhere a status/stage appears regardless of which
+     feature it comes from. See statusColorKey() in app.js for how a given
+     status/stage text resolves to one of these five. */
   --success: #16a34a;
   --success-bg: #f0fdf4;
   --success-border: #bbf7d0;
@@ -24,6 +27,9 @@
   --info: #0369a1;
   --info-bg: #f0f9ff;
   --info-border: #bae6fd;
+  --neutral: var(--text-muted);
+  --neutral-bg: var(--bg);
+  --neutral-border: var(--border);
 
   --radius-sm: 6px;
   --radius: 10px;
@@ -41,12 +47,6 @@
   --role-geotechnical: #78350f;
   --role-environmental: #15803d;
   --role-transportation: #6d28d9;
-
-  --stage-planning: #64748b;
-  --stage-design: #2563eb;
-  --stage-approval: #b45309;
-  --stage-construction: #ea580c;
-  --stage-completed: #15803d;
 }
 
 * { box-sizing: border-box; }
@@ -239,15 +239,21 @@ h3 { font-size: 0.95rem; font-weight: 700; margin: 0 0 0.6rem; }
 .badge.role-Environmental { background: var(--role-environmental); }
 .badge.role-Transportation { background: var(--role-transportation); }
 .badge.admin { background: var(--primary-dark); }
-.badge.stage-Planning { background: var(--stage-planning); }
-.badge.stage-Design { background: var(--stage-design); }
-.badge.stage-Approval { background: var(--stage-approval); }
-.badge.stage-Construction { background: var(--stage-construction); }
-.badge.stage-Completed { background: var(--stage-completed); }
 .badge.badge-outline { background: var(--bg); color: var(--text); border: 1px solid var(--border); font-weight: 600; }
 .badge.badge-overdue { background: var(--danger); color: white; }
 .badge.badge-current { background: var(--success); }
 .badge.badge-superseded { background: var(--text-muted); }
+
+/* The shared status-color system's "solid" form — used for stage badges
+   (and anything else badge-styled rather than pill-outlined). Same five
+   meanings and same underlying tokens as the .status rules below; only the
+   visual treatment (solid fill vs tinted outline) differs, matching the
+   two badge styles this app already had before this was consolidated. */
+.badge.badge-success { background: var(--success); }
+.badge.badge-warning { background: var(--warning); }
+.badge.badge-danger { background: var(--danger); }
+.badge.badge-info { background: var(--info); }
+.badge.badge-neutral { background: var(--neutral); }
 
 .status {
   display: inline-block;
@@ -259,27 +265,27 @@ h3 { font-size: 0.95rem; font-weight: 700; margin: 0 0 0.6rem; }
   color: var(--text-muted);
   background: var(--bg);
 }
-.status.status-Done { color: var(--success); border-color: var(--success-border); background: var(--success-bg); }
-.status.status-Answered { color: var(--success); border-color: var(--success-border); background: var(--success-bg); }
-.status.status-In-Progress { color: var(--warning); border-color: var(--warning-border); background: var(--warning-bg); }
-.status.status-Open { color: var(--warning); border-color: var(--warning-border); background: var(--warning-bg); }
-.status.status-Review { color: var(--accent-teal); border-color: #99f6e4; background: #f0fdfa; }
-.status.status-To-Do { color: var(--text-muted); border-color: var(--border); background: var(--bg); }
-.status.status-Resolved { color: var(--success); border-color: var(--success-border); background: var(--success-bg); }
-.status.status-Closed { color: var(--success); border-color: var(--success-border); background: var(--success-bg); }
-.status.status-Decided { color: var(--success); border-color: var(--success-border); background: var(--success-bg); }
-.status.status-Pending { color: var(--warning); border-color: var(--warning-border); background: var(--warning-bg); }
-.status.status-Approved { color: var(--success); border-color: var(--success-border); background: var(--success-bg); }
-.status.status-Rejected { color: var(--danger); border-color: var(--danger-border); background: var(--danger-bg); }
+/* Every status pill in the app — tasks, RFIs, snags, risks, decisions,
+   change orders, status-history entries — resolves to one of these five
+   classes via statusColorKey() in app.js, never a per-feature rule. Add a
+   new status anywhere and it's colored by what it *means* automatically;
+   there's nothing feature-specific to add here. */
+.status.status-success { color: var(--success); border-color: var(--success-border); background: var(--success-bg); }
+.status.status-warning { color: var(--warning); border-color: var(--warning-border); background: var(--warning-bg); }
+.status.status-danger { color: var(--danger); border-color: var(--danger-border); background: var(--danger-bg); }
+.status.status-info { color: var(--info); border-color: var(--info-border); background: var(--info-bg); }
+.status.status-neutral { color: var(--neutral); border-color: var(--neutral-border); background: var(--neutral-bg); }
 
 /* The risk/decision/change-order registers' status dropdown is always the
    live control (anyone who can see the project can change it, so there's no
    read-only badge state to fall back to) — tinting the select itself the
    same way the read-only .status badges are tinted keeps it glanceable at a
    color level, consistent with how status reads everywhere else in the app. */
-select.select-inline.status-Open, select.select-inline.status-Pending { border-color: var(--warning-border); background: var(--warning-bg); color: var(--warning); }
-select.select-inline.status-Closed, select.select-inline.status-Decided, select.select-inline.status-Approved { border-color: var(--success-border); background: var(--success-bg); color: var(--success); }
-select.select-inline.status-Rejected { border-color: var(--danger-border); background: var(--danger-bg); color: var(--danger); }
+select.select-inline.status-success { border-color: var(--success-border); background: var(--success-bg); color: var(--success); }
+select.select-inline.status-warning { border-color: var(--warning-border); background: var(--warning-bg); color: var(--warning); }
+select.select-inline.status-danger { border-color: var(--danger-border); background: var(--danger-bg); color: var(--danger); }
+select.select-inline.status-info { border-color: var(--info-border); background: var(--info-bg); color: var(--info); }
+select.select-inline.status-neutral { border-color: var(--neutral-border); background: var(--neutral-bg); color: var(--neutral); }
 
 /* ============ FORMS ============ */
 
