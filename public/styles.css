@@ -1027,6 +1027,16 @@ body.gantt-dragging { user-select: none; }
    almost everything else on narrow screens was being squeezed into
    whatever sliver of width the sidebar left behind. */
 @media (max-width: 768px) {
+  /* .app-shell is a row flex container. The sidebar opts out of that
+     layout via position:fixed, but .mobile-topbar only has position:sticky
+     (which still participates in flex layout) — left in a row, it became
+     a flex item sized to its own content width but stretched to full
+     viewport height by the container's default align-items:stretch,
+     rendering as a tall blank column beside .main-content. Switching to a
+     column direction stacks the topbar above the content instead, so both
+     take the full width. */
+  .app-shell { flex-direction: column; }
+
   .mobile-topbar {
     display: flex;
     align-items: center;
