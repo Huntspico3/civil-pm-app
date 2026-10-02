@@ -256,6 +256,24 @@ function withComputedProgress(project, data) {
   return { ...project, progress, taskProgress: { done: auto.done, total: auto.total } };
 }
 
+// Progress % vs. how much of the timeline has elapsed. Comfortably
+// ahead-or-on-schedule (within 10 points) is "onTrack"; a 10-25 point gap is
+// "atRisk"; more than 25 points behind is "behind". Simple fixed
+// thresholds, not real critical-path scheduling. Shared by /api/analytics
+// (aggregated counts) and /api/portfolio (per-project, so the Portfolio
+// Timeline's bars can be colored by the same standardized status palette
+// the rest of the app uses, instead of each project's own custom color).
+function classifyProjectHealth(project, data) {
+  const progress = withComputedProgress(project, data).progress;
+  const startMs = new Date(project.startDate + 'T00:00:00').getTime();
+  const endMs = new Date(project.endDate + 'T00:00:00').getTime();
+  const elapsedPct = endMs > startMs ? Math.max(0, Math.min(100, ((Date.now() - startMs) / (endMs - startMs)) * 100)) : 100;
+  const delta = progress - elapsedPct;
+  if (delta >= -10) return 'onTrack';
+  if (delta >= -25) return 'atRisk';
+  return 'behind';
+}
+
 // --- admin-editable option lists (roles, stages, task statuses, external contact
 // categories) — all managed the same way from the Settings page. `usageParts`
 // returns human-readable counts of what currently uses a given option, so removal
@@ -994,23 +1012,11 @@ app.get('/api/analytics', requireAuth, (req, res) => {
   const scopedProjects = req.user.isAdmin ? data.projects : data.projects.filter(p => p.createdBy === req.user.id);
   const scopedProjectIds = new Set(scopedProjects.map(p => p.id));
   const doneStatus = data.taskStatuses[data.taskStatuses.length - 1];
-
-  // 1. Projects by status — progress % vs. how much of the timeline has
-  // elapsed. Comfortably ahead-or-on-schedule (within 10 points) is "On
-  // Track"; a 10-25 point gap is "At Risk"; more than 25 points behind is
-  // "Behind". Simple fixed thresholds, not real critical-path scheduling.
   const now = Date.now();
+
+  // 1. Projects by status
   const projectsByStatus = { onTrack: 0, atRisk: 0, behind: 0 };
-  scopedProjects.forEach(p => {
-    const progress = withComputedProgress(p, data).progress;
-    const startMs = new Date(p.startDate + 'T00:00:00').getTime();
-    const endMs = new Date(p.endDate + 'T00:00:00').getTime();
-    const elapsedPct = endMs > startMs ? Math.max(0, Math.min(100, ((now - startMs) / (endMs - startMs)) * 100)) : 100;
-    const delta = progress - elapsedPct;
-    if (delta >= -10) projectsByStatus.onTrack++;
-    else if (delta >= -25) projectsByStatus.atRisk++;
-    else projectsByStatus.behind++;
-  });
+  scopedProjects.forEach(p => { projectsByStatus[classifyProjectHealth(p, data)]++; });
 
   // 2. Team workload — open (not-Done) task count per person, in scope.
   // Includes everyone, even people with zero, so "too little on their
@@ -1837,6 +1843,7 @@ app.get('/api/portfolio', requireAuth, (req, res) => {
       progress: enriched.progress,
       progressMode: p.progressMode,
       taskProgress: enriched.taskProgress,
+      health: classifyProjectHealth(p, data),
       createdBy: p.createdBy,
       location: p.location,
       latitude: p.latitude,

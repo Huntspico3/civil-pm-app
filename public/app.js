@@ -132,6 +132,15 @@ function badgeColorClass(status, domain) {
   return 'badge-' + statusColorKey(status, domain);
 }
 
+const PROJECT_HEALTH_INFO = {
+  onTrack: { label: 'On Track', colorVar: 'var(--success)', statusColor: 'success' },
+  atRisk: { label: 'At Risk', colorVar: 'var(--warning)', statusColor: 'warning' },
+  behind: { label: 'Behind', colorVar: 'var(--danger)', statusColor: 'danger' }
+};
+function projectHealthInfo(health) {
+  return PROJECT_HEALTH_INFO[health] || PROJECT_HEALTH_INFO.onTrack;
+}
+
 function escapeHtml(str) {
   return String(str).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
@@ -3110,7 +3119,7 @@ async function renderPortfolio(main) {
     const left = pct(startMs);
     const width = Math.max(pct(endMs) - left, 1.5);
     const progress = p.progress || 0;
-    const color = p.color || '#1e3a5f';
+    const color = projectHealthInfo(p.health).colorVar;
     const canEdit = state.me.isAdmin || p.createdBy === state.me.id;
     const handlesHtml = canEdit
       ? `<div class="gantt-bar-handle gantt-bar-handle-start" data-resize="start"></div><div class="gantt-bar-handle gantt-bar-handle-end" data-resize="end"></div>`
@@ -3139,7 +3148,7 @@ async function renderPortfolio(main) {
 
   main.innerHTML = `
     <h1>Portfolio Timeline</h1>
-    <p class="subtitle">All projects across the organisation. Click a bar to see project details, change its color, or update progress.</p>
+    <p class="subtitle">All projects across the organisation. Bar color reflects schedule status (green = on track, amber = at risk, red = behind). Click a bar to see project details or update progress.</p>
     <div class="card gantt">
       <div class="gantt-inner">
         <div class="gantt-scale">
@@ -3340,6 +3349,7 @@ function showProjectModal(project, boardMain) {
 
   const canEdit = state.me.isAdmin || project.createdBy === state.me.id;
   const color = project.color || '#1e3a5f';
+  const health = projectHealthInfo(project.health);
   const progress = project.progress || 0;
   const isManualProgress = project.progressMode === 'manual';
   const taskProgress = project.taskProgress || { done: 0, total: 0 };
@@ -3356,24 +3366,28 @@ function showProjectModal(project, boardMain) {
         </li>
       `).join('')}</ul>`;
 
+  const statusBadgeHtml = `<span class="status status-${health.statusColor}">${health.label}</span>`;
+
   const colorProgressHtml = canEdit
     ? `
       <div class="form-row">
         <div>
-          <label>Bar Color</label>
+          <label>Project Color</label>
           <input type="color" id="project-modal-color" value="${color}" style="width:100%; height:2.3rem; padding:0.2rem; cursor:pointer;" />
+          <p class="hint">Used to identify this project on its own page.</p>
         </div>
         <div>
           <label>Progress (%)</label>
           <input type="number" id="project-modal-progress" min="0" max="100" step="1" value="${progress}" />
         </div>
       </div>
+      <p class="hint">Timeline status: ${statusBadgeHtml} — computed from progress vs. schedule, shown as the bar color on the Portfolio Timeline.</p>
       <p class="hint">${escapeHtml(progressHint)}${isManualProgress ? ' <button class="btn small secondary" id="project-modal-reset-progress" type="button">Reset to Automatic</button>' : ''}</p>
       <div id="project-modal-error" class="error-text"></div>
     `
     : `
       <div class="modal-dates">
-        <div><label>Color</label><div><span style="display:inline-block; width:14px; height:14px; border-radius:3px; background:${color}; vertical-align:middle;"></span></div></div>
+        <div><label>Status</label><div>${statusBadgeHtml}</div></div>
         <div><label>Progress</label><div>${progress}%</div></div>
       </div>
       <p class="hint">${escapeHtml(progressHint)}</p>
