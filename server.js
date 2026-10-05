@@ -12,6 +12,7 @@ const taskImport = require('./taskImport');
 const weather = require('./weather');
 const rateLimit = require('express-rate-limit');
 const auditLog = require('./auditLog');
+const ExcelJS = require('exceljs');
 
 // Records a meaningful data change to the audit log. Always server-side —
 // every call site below is inside a route handler after its own permission
@@ -435,8 +436,35 @@ app.patch('/api/projects/:id', requireAuth, async (req, res) => {
   const canEdit = req.user.isAdmin || project.createdBy === req.user.id;
   if (!canEdit) return res.status(403).json({ error: 'Only an admin or this project\'s creator can edit it' });
 
-  const { color, progress, progressMode, startDate, endDate, location } = req.body;
+  const { color, progress, progressMode, startDate, endDate, location, name, description, stage, code, client, siteAddress } = req.body;
   const changes = [];
+
+  if (name !== undefined) {
+    if (!String(name).trim()) return res.status(400).json({ error: 'Project name is required' });
+    project.name = String(name).trim();
+    changes.push('name');
+  }
+  if (description !== undefined) {
+    project.description = String(description || '').trim();
+    changes.push('description');
+  }
+  if (stage !== undefined) {
+    if (!data.stages.includes(stage)) return res.status(400).json({ error: 'Invalid stage' });
+    project.stage = stage;
+    changes.push('stage');
+  }
+  if (code !== undefined) {
+    project.code = String(code || '').trim() || null;
+    changes.push('code');
+  }
+  if (client !== undefined) {
+    project.client = String(client || '').trim() || null;
+    changes.push('client');
+  }
+  if (siteAddress !== undefined) {
+    project.siteAddress = String(siteAddress || '').trim() || null;
+    changes.push('site address');
+  }
 
   // Resolved once here (not on every weather fetch) — the project just
   // stores the coordinates the location string last resolved to.
@@ -499,6 +527,249 @@ app.patch('/api/projects/:id', requireAuth, async (req, res) => {
   db.save(data);
   if (changes.length > 0) logAudit(req, `Project updated (${changes.join(', ')})`, project.name, project.name);
   res.json(withComputedProgress(project, data));
+});
+
+// --- project profile (identity info + internal/external contacts) ---
+// Internal contacts reuse the exact "team" definition /api/portfolio already
+// computes (distinct users with a task assigned in the project), plus the
+// project's manager — no separate membership list to keep in sync. External
+// contacts are a project-scoped link into the existing (global, read-only)
+// external contacts list, each carrying its own role-on-this-project label.
+app.get('/api/projects/:id/profile', requireAuth, (req, res) => {
+  const data = db.load();
+  const project = data.projects.find(p => p.id === Number(req.params.id));
+  if (!project) return res.status(404).json({ error: 'Project not found' });
+  if (!canSeeProject(req.user, project, data.tasks)) return res.status(403).json({ error: 'Not visible to you' });
+
+  const manager = data.users.find(u => u.id === project.createdBy) || null;
+  const tasks = data.tasks.filter(t => t.projectId === project.id);
+  const internalIds = new Set(tasks.map(t => t.assigneeId).filter(Boolean));
+  if (project.createdBy) internalIds.add(project.createdBy);
+  const internalContacts = [...internalIds]
+    .map(id => data.users.find(u => u.id === id))
+    .filter(Boolean);
+
+  const externalContacts = data.projectContacts
+    .filter(c => c.projectId === project.id)
+    .map(c => ({
+      id: c.id,
+      roleOnProject: c.roleOnProject,
+      contact: data.externalContacts.find(ec => ec.id === c.externalContactId) || null
+    }))
+    .filter(c => c.contact);
+
+  res.json({ ...project, manager, internalContacts, externalContacts });
+});
+
+app.post('/api/projects/:id/contacts', requireAuth, (req, res) => {
+  const data = db.load();
+  const project = data.projects.find(p => p.id === Number(req.params.id));
+  if (!project) return res.status(404).json({ error: 'Project not found' });
+  const canEdit = req.user.isAdmin || project.createdBy === req.user.id;
+  if (!canEdit) return res.status(403).json({ error: "Only an admin or this project's manager can add a contact" });
+
+  const { externalContactId, roleOnProject } = req.body;
+  const contact = data.externalContacts.find(c => c.id === Number(externalContactId));
+  if (!contact) return res.status(400).json({ error: 'External contact not found' });
+  const role = String(roleOnProject || '').trim();
+  if (!role) return res.status(400).json({ error: 'A role on this project is required' });
+
+  const link = { id: db.nextId('projectContact'), projectId: project.id, externalContactId: contact.id, roleOnProject: role };
+  data.projectContacts.push(link);
+  db.save(data);
+  logAudit(req, `Contact added (${contact.name} — ${role})`, project.name, project.name);
+  res.status(201).json({ id: link.id, roleOnProject: link.roleOnProject, contact });
+});
+
+app.delete('/api/projects/:id/contacts/:linkId', requireAuth, (req, res) => {
+  const data = db.load();
+  const project = data.projects.find(p => p.id === Number(req.params.id));
+  if (!project) return res.status(404).json({ error: 'Project not found' });
+  const canEdit = req.user.isAdmin || project.createdBy === req.user.id;
+  if (!canEdit) return res.status(403).json({ error: "Only an admin or this project's manager can remove a contact" });
+
+  const idx = data.projectContacts.findIndex(c => c.id === Number(req.params.linkId) && c.projectId === project.id);
+  if (idx === -1) return res.status(404).json({ error: 'Contact link not found' });
+  const removed = data.projectContacts[idx];
+  const contact = data.externalContacts.find(c => c.id === removed.externalContactId);
+  data.projectContacts.splice(idx, 1);
+  db.save(data);
+  logAudit(req, `Contact removed (${contact ? contact.name : 'Unknown'})`, project.name, project.name);
+  res.status(204).end();
+});
+
+// --- weekly updates (one per project per Monday-Sunday week) ---
+// Permission model mirrors the risk/decision/change-order registers: anyone
+// who can see the project can submit or edit its current week's update
+// (canSeeProject — admin, this project's manager, or has a task in it), not
+// a narrower rule. The aggregate cross-project "who hasn't submitted yet"
+// view is gated the same way External Contacts already is (any manager or
+// admin, not scoped to projects they personally manage).
+function enrichWeeklyUpdate(w, data) {
+  const weekEndMs = new Date(w.weekStart + 'T00:00:00').getTime() + 6 * 24 * 60 * 60 * 1000;
+  const weekEnd = new Date(weekEndMs);
+  return {
+    ...w,
+    weekEnd: `${weekEnd.getFullYear()}-${String(weekEnd.getMonth() + 1).padStart(2, '0')}-${String(weekEnd.getDate()).padStart(2, '0')}`,
+    submittedByUser: data.users.find(u => u.id === w.submittedBy) || null,
+    updatedByUser: w.updatedBy ? data.users.find(u => u.id === w.updatedBy) || null : null,
+    locked: Date.now() > weekEndMs + (23 * 60 + 59) * 60 * 1000 + 59000
+  };
+}
+
+app.get('/api/weekly-updates/current', requireManager, (req, res) => {
+  const data = db.load();
+  const weekStart = db.mondayOf(new Date());
+  const rows = data.projects.map(p => {
+    const update = data.weeklyUpdates.find(w => w.projectId === p.id && w.weekStart === weekStart);
+    return {
+      projectId: p.id,
+      projectName: p.name,
+      weekStart,
+      submitted: !!update,
+      submittedByUser: update ? data.users.find(u => u.id === update.submittedBy) || null : null,
+      submittedAt: update ? update.submittedAt : null
+    };
+  });
+  res.json({ weekStart, rows });
+});
+
+app.get('/api/projects/:id/weekly-updates', requireAuth, (req, res) => {
+  const data = db.load();
+  const project = data.projects.find(p => p.id === Number(req.params.id));
+  if (!project) return res.status(404).json({ error: 'Project not found' });
+  if (!canSeeProject(req.user, project, data.tasks)) return res.status(403).json({ error: 'Not visible to you' });
+
+  const updates = data.weeklyUpdates
+    .filter(w => w.projectId === project.id)
+    .sort((a, b) => b.weekStart.localeCompare(a.weekStart))
+    .map(w => enrichWeeklyUpdate(w, data));
+  res.json(updates);
+});
+
+app.get('/api/projects/:id/weekly-updates/:weekStart', requireAuth, (req, res) => {
+  const data = db.load();
+  const project = data.projects.find(p => p.id === Number(req.params.id));
+  if (!project) return res.status(404).json({ error: 'Project not found' });
+  if (!canSeeProject(req.user, project, data.tasks)) return res.status(403).json({ error: 'Not visible to you' });
+  if (!DATE_RE.test(req.params.weekStart) || db.mondayOf(req.params.weekStart) !== req.params.weekStart) {
+    return res.status(400).json({ error: 'weekStart must be a Monday in YYYY-MM-DD format' });
+  }
+
+  const update = data.weeklyUpdates.find(w => w.projectId === project.id && w.weekStart === req.params.weekStart);
+  if (!update) return res.json({ projectId: project.id, weekStart: req.params.weekStart, submitted: false });
+  res.json({ submitted: true, ...enrichWeeklyUpdate(update, data) });
+});
+
+app.post('/api/projects/:id/weekly-updates', requireAuth, (req, res) => {
+  const data = db.load();
+  const project = data.projects.find(p => p.id === Number(req.params.id));
+  if (!project) return res.status(404).json({ error: 'Project not found' });
+  if (!canSeeProject(req.user, project, data.tasks)) return res.status(403).json({ error: 'Not visible to you' });
+
+  const { weekStart, whatWasDone, issues, planNextWeek, percentComplete } = req.body;
+  if (!DATE_RE.test(weekStart || '') || db.mondayOf(weekStart) !== weekStart) {
+    return res.status(400).json({ error: 'weekStart must be a Monday in YYYY-MM-DD format' });
+  }
+  if (data.weeklyUpdates.some(w => w.projectId === project.id && w.weekStart === weekStart)) {
+    return res.status(409).json({ error: 'An update for this week already exists — edit it instead.' });
+  }
+  if (percentComplete !== undefined && percentComplete !== null) {
+    if (typeof percentComplete !== 'number' || percentComplete < 0 || percentComplete > 100) {
+      return res.status(400).json({ error: 'Percent complete must be a number between 0 and 100' });
+    }
+  }
+
+  const update = {
+    id: db.nextId('weeklyUpdate'),
+    projectId: project.id,
+    weekStart,
+    whatWasDone: String(whatWasDone || '').trim(),
+    issues: String(issues || '').trim(),
+    planNextWeek: String(planNextWeek || '').trim(),
+    percentComplete: (percentComplete === undefined || percentComplete === null) ? null : percentComplete,
+    submittedBy: req.user.id,
+    submittedAt: new Date().toISOString(),
+    updatedBy: null,
+    updatedAt: null
+  };
+  data.weeklyUpdates.push(update);
+  db.save(data);
+  logAudit(req, `Weekly update submitted for week of ${weekStart}`, project.name, project.name);
+  res.status(201).json(enrichWeeklyUpdate(update, data));
+});
+
+app.patch('/api/projects/:id/weekly-updates/:weekStart', requireAuth, (req, res) => {
+  const data = db.load();
+  const project = data.projects.find(p => p.id === Number(req.params.id));
+  if (!project) return res.status(404).json({ error: 'Project not found' });
+  if (!canSeeProject(req.user, project, data.tasks)) return res.status(403).json({ error: 'Not visible to you' });
+
+  const update = data.weeklyUpdates.find(w => w.projectId === project.id && w.weekStart === req.params.weekStart);
+  if (!update) return res.status(404).json({ error: 'No update exists yet for this week — submit one instead.' });
+
+  const enriched = enrichWeeklyUpdate(update, data);
+  if (enriched.locked) return res.status(403).json({ error: 'This week is closed and can no longer be edited.' });
+  if (!req.user.isAdmin && update.submittedBy !== req.user.id) {
+    return res.status(403).json({ error: 'Only the person who submitted this update can edit it.' });
+  }
+
+  const { whatWasDone, issues, planNextWeek, percentComplete } = req.body;
+  if (percentComplete !== undefined && percentComplete !== null) {
+    if (typeof percentComplete !== 'number' || percentComplete < 0 || percentComplete > 100) {
+      return res.status(400).json({ error: 'Percent complete must be a number between 0 and 100' });
+    }
+  }
+  if (whatWasDone !== undefined) update.whatWasDone = String(whatWasDone || '').trim();
+  if (issues !== undefined) update.issues = String(issues || '').trim();
+  if (planNextWeek !== undefined) update.planNextWeek = String(planNextWeek || '').trim();
+  if (percentComplete !== undefined) update.percentComplete = percentComplete;
+  update.updatedBy = req.user.id;
+  update.updatedAt = new Date().toISOString();
+
+  db.save(data);
+  logAudit(req, `Weekly update edited for week of ${update.weekStart}`, project.name, project.name);
+  res.json(enrichWeeklyUpdate(update, data));
+});
+
+app.get('/api/projects/:id/weekly-updates/export/xlsx', requireAuth, async (req, res) => {
+  const data = db.load();
+  const project = data.projects.find(p => p.id === Number(req.params.id));
+  if (!project) return res.status(404).json({ error: 'Project not found' });
+  if (!canSeeProject(req.user, project, data.tasks)) return res.status(403).json({ error: 'Not visible to you' });
+
+  const updates = data.weeklyUpdates
+    .filter(w => w.projectId === project.id)
+    .sort((a, b) => a.weekStart.localeCompare(b.weekStart))
+    .map(w => enrichWeeklyUpdate(w, data));
+
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet('Weekly Updates');
+  sheet.columns = [
+    { header: 'Week Starting', key: 'weekStart', width: 14 },
+    { header: 'What Was Done', key: 'whatWasDone', width: 45 },
+    { header: 'Issues / Blockers', key: 'issues', width: 32 },
+    { header: 'Plan For Next Week', key: 'planNextWeek', width: 32 },
+    { header: '% Complete', key: 'percentComplete', width: 12 },
+    { header: 'Submitted By', key: 'submittedBy', width: 18 },
+    { header: 'Submitted At', key: 'submittedAt', width: 20 }
+  ];
+  updates.forEach(u => sheet.addRow({
+    weekStart: u.weekStart,
+    whatWasDone: u.whatWasDone,
+    issues: u.issues,
+    planNextWeek: u.planNextWeek,
+    percentComplete: u.percentComplete == null ? '' : u.percentComplete,
+    submittedBy: u.submittedByUser ? u.submittedByUser.name : '',
+    submittedAt: u.submittedAt ? new Date(u.submittedAt).toLocaleString() : ''
+  }));
+  sheet.getRow(1).font = { bold: true };
+
+  const safeName = project.name.replace(/[^a-z0-9]+/gi, '-').replace(/^-+|-+$/g, '');
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', `attachment; filename="${safeName}-weekly-updates.xlsx"`);
+  await workbook.xlsx.write(res);
+  res.end();
 });
 
 // A simple 5-7 day forecast for a project's location, with each day flagged

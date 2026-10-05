@@ -31,6 +31,25 @@ const DEFAULT_EXTERNAL_CONTACT_CATEGORIES = ['Subcontractor', 'Structural Consul
 // task to a new column starts it from something reasonable rather than 0 or
 // whatever it was before. Used both to backfill tasks that predate per-task
 // progress and, in server.js, to re-default progress on a status change.
+// The Monday (YYYY-MM-DD) of the week containing a given date — weekly
+// updates run Monday-Sunday, so this is both how "this week" is identified
+// and how a submitted weekStart is validated (mondayOf(weekStart) must
+// equal weekStart, or it isn't actually a Monday).
+function mondayOf(dateInput) {
+  const d = typeof dateInput === 'string' ? new Date(dateInput + 'T00:00:00') : new Date(dateInput);
+  const day = d.getDay(); // 0=Sun..6=Sat
+  const diff = day === 0 ? -6 : 1 - day;
+  const monday = new Date(d);
+  monday.setDate(d.getDate() + diff);
+  // Local getters, not toISOString() — toISOString() converts to UTC first,
+  // which silently shifts the date backward a day in any timezone ahead of
+  // UTC (midnight local is still "yesterday" in UTC).
+  const yyyy = monday.getFullYear();
+  const mm = String(monday.getMonth() + 1).padStart(2, '0');
+  const dd = String(monday.getDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
+}
+
 function defaultProgressForStatus(status, taskStatuses) {
   const statusCount = taskStatuses.length;
   const index = taskStatuses.indexOf(status);
@@ -59,7 +78,7 @@ const DEFAULT_USER_PASSWORDS = {
 
 function seed() {
   return {
-    nextIds: { user: 6, project: 3, task: 8, externalContact: 5, report: 1, rfi: 4, document: 1, snag: 1, risk: 1, decision: 1, changeOrder: 1 },
+    nextIds: { user: 6, project: 3, task: 8, externalContact: 5, report: 1, rfi: 4, document: 1, snag: 1, risk: 1, decision: 1, changeOrder: 1, weeklyUpdate: 1, projectContact: 1 },
     roles: DEFAULT_ROLES.slice(),
     stages: DEFAULT_STAGES.slice(),
     taskStatuses: DEFAULT_TASK_STATUSES.slice(),
@@ -83,6 +102,9 @@ function seed() {
         id: 1,
         name: 'Riverside Bridge Rehabilitation',
         description: 'Structural assessment and rehab of the Riverside Ave bridge deck and piers.',
+        code: 'RBR-2026-01',
+        client: 'City of Riverside Public Works',
+        siteAddress: '400 Riverside Ave, Riverside',
         createdBy: 1,
         startDate: '2026-03-01',
         endDate: '2026-12-15',
@@ -99,6 +121,9 @@ function seed() {
         id: 2,
         name: 'Maple Street Corridor Upgrade',
         description: 'Road widening, drainage, and traffic signal upgrades along Maple Street.',
+        code: 'MSC-2026-02',
+        client: 'City Transportation Department',
+        siteAddress: 'Maple St between 3rd Ave and 9th Ave',
         createdBy: 1,
         startDate: '2026-06-01',
         endDate: '2027-02-28',
@@ -167,7 +192,9 @@ function seed() {
     snags: [],
     risks: [],
     decisions: [],
-    changeOrders: []
+    changeOrders: [],
+    weeklyUpdates: [],
+    projectContacts: []
   };
 }
 
@@ -189,7 +216,9 @@ const COLLECTIONS = {
   snags: 'snag',
   risks: 'risk',
   decisions: 'decision',
-  changeOrders: 'changeOrder'
+  changeOrders: 'changeOrder',
+  weeklyUpdates: 'weeklyUpdate',
+  projectContacts: 'projectContact'
 };
 
 function backfillSchema(data) {
@@ -268,6 +297,14 @@ function backfillSchema(data) {
       // The weekly AI summary is optional until the first one is generated.
       if (!('summary' in p)) {
         p.summary = null;
+        changed = true;
+      }
+      // Project Profile fields (code/client/site address) are all optional
+      // and postdate this schema, so older projects simply don't have them.
+      if (!('code' in p)) {
+        p.code = null;
+        p.client = null;
+        p.siteAddress = null;
         changed = true;
       }
       // Weather is opt-in — no location set means no forecast shown, not an error.
@@ -352,7 +389,7 @@ function nextId(kind) {
 }
 
 module.exports = {
-  load, save, nextId, defaultProgressForStatus,
+  load, save, nextId, defaultProgressForStatus, mondayOf,
   DEFAULT_ROLES, DEFAULT_STAGES, DEFAULT_TASK_STATUSES, DEFAULT_EXTERNAL_CONTACT_CATEGORIES,
   PROJECT_COLOR_PALETTE, DATA_DIR
 };

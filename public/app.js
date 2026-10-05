@@ -98,7 +98,8 @@ const STATUS_COLOR_TABLES = {
   risk: { open: 'danger', closed: 'neutral' },
   decision: { pending: 'warning', decided: 'success' },
   snag: { open: 'danger', 'in progress': 'warning', resolved: 'success' },
-  changeOrder: { pending: 'warning', approved: 'success', rejected: 'danger' }
+  changeOrder: { pending: 'warning', approved: 'success', rejected: 'danger' },
+  weeklyUpdate: { 'not yet submitted': 'warning', submitted: 'success' }
 };
 
 // A generic fallback for anything not in a table above, so a future/unknown
@@ -779,6 +780,7 @@ const NAV_ICONS = {
   'offsite-reports': '<svg viewBox="0 0 24 24"><path d="M4 8h3l1.5-2h7L17 8h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"/><circle cx="12" cy="13" r="3.4"/></svg>',
   'contacts': '<svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.2"/><path d="M5 20c1.2-3.4 4-5 7-5s5.8 1.6 7 5"/></svg>',
   'external-contacts': '<svg viewBox="0 0 24 24"><path d="M5 21V5a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v16"/><path d="M13 21V9a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v12"/><path d="M8 8h.01M8 11h.01M8 14h.01M16 12h.01M16 15h.01"/></svg>',
+  'weekly-updates-overview': '<svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="17" rx="1.5"/><path d="M3 9h18M8 2v4M16 2v4"/><path d="M7.5 13.5l1.5 1.5 3-3"/></svg>',
   'team': '<svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3"/><path d="M2.5 20c.9-3.2 3.4-5 6.5-5s5.6 1.8 6.5 5"/><circle cx="17" cy="9" r="2.2"/><path d="M15 14.2c2.4.4 4 1.8 4.6 4"/></svg>',
   'audit-log': '<svg viewBox="0 0 24 24"><path d="M7 3h8l4 4v14a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/><path d="M15 3v4h4"/><path d="M8 12h8M8 15.5h8M8 8.5h4"/></svg>',
   'settings': '<svg viewBox="0 0 24 24"><path d="M10.3 2.5h3.4l.5 2.4a7.6 7.6 0 0 1 2 1.2l2.3-.9 1.7 3-1.9 1.5c.1.4.1.8.1 1.3s0 .9-.1 1.3l1.9 1.5-1.7 3-2.3-.9a7.6 7.6 0 0 1-2 1.2l-.5 2.4h-3.4l-.5-2.4a7.6 7.6 0 0 1-2-1.2l-2.3.9-1.7-3 1.9-1.5A7 7 0 0 1 5.6 12c0-.5 0-.9.1-1.3L3.8 9.2l1.7-3 2.3.9a7.6 7.6 0 0 1 2-1.2z"/><circle cx="12" cy="12" r="3"/></svg>'
@@ -794,6 +796,7 @@ function renderShell() {
     { key: 'contacts', label: 'Contacts' }
   ];
   if (state.me.isAdmin || state.me.isManager) nav.push({ key: 'external-contacts', label: 'External Contacts' });
+  if (state.me.isAdmin || state.me.isManager) nav.push({ key: 'weekly-updates-overview', label: 'Weekly Updates' });
   if (state.me.isAdmin) nav.push({ key: 'team', label: 'Team' });
   if (state.me.isAdmin) nav.push({ key: 'audit-log', label: 'Audit Log' });
   if (state.me.isAdmin) nav.push({ key: 'settings', label: 'Settings' });
@@ -863,6 +866,9 @@ function bindShell() {
   else if (state.view === 'project-risks') renderProjectRegister(main, state.activeProjectId, 'risks');
   else if (state.view === 'project-decisions') renderProjectRegister(main, state.activeProjectId, 'decisions');
   else if (state.view === 'project-change-orders') renderProjectRegister(main, state.activeProjectId, 'change-orders');
+  else if (state.view === 'project-weekly-updates') renderProjectWeeklyUpdates(main, state.activeProjectId);
+  else if (state.view === 'project-profile') renderProjectProfile(main, state.activeProjectId);
+  else if (state.view === 'weekly-updates-overview') renderWeeklyUpdatesOverview(main);
   else if (state.view === 'contacts') renderContacts(main);
   else if (state.view === 'external-contacts') renderExternalContacts(main);
   else if (state.view === 'team') renderTeam(main);
@@ -1370,10 +1376,12 @@ function projectTabsHtml(active) {
     { key: 'project-snags', label: 'Snags' },
     { key: 'project-risks', label: 'Risk Register' },
     { key: 'project-decisions', label: 'Decision Register' },
-    { key: 'project-change-orders', label: 'Change Orders' }
+    { key: 'project-change-orders', label: 'Change Orders' },
+    { key: 'project-weekly-updates', label: 'Weekly Updates' },
+    { key: 'project-profile', label: 'Profile' }
   ];
   return `<div class="dash-toggle">${tabs.map(t => `
-    <button class="btn ${t.key === active ? '' : 'secondary'}" data-project-tab="${t.key}">${t.label}</button>
+    <button type="button" class="btn ${t.key === active ? '' : 'secondary'}" data-project-tab="${t.key}">${t.label}</button>
   `).join('')}</div>`;
 }
 
@@ -2915,6 +2923,398 @@ function showRegisterEditModal(main, projectId, kind, entry, onUpdated) {
   });
 }
 
+// ---------------- WEEKLY UPDATES ----------------
+// One update per project per Monday-Sunday week. The current week's entry
+// drives the editable form at the top of a project's page; everything
+// before it is read-only history (it's already past, so always locked).
+// Permission-wise this follows the exact same "anyone who can see the
+// project can add/edit" rule the risk/decision/change-order registers use.
+
+async function renderWeeklyUpdatesOverview(main) {
+  main.innerHTML = `<h1>Weekly Updates</h1><p class="subtitle">Loading…</p>`;
+  let data;
+  try {
+    data = await api('/weekly-updates/current');
+  } catch (e) {
+    main.innerHTML = `<h1>Weekly Updates</h1><p class="error-text">${escapeHtml(e.message)}</p>`;
+    return;
+  }
+
+  const rows = data.rows.map(r => `
+    <tr class="task-row-clickable" data-open-project-updates="${r.projectId}">
+      <td>${escapeHtml(r.projectName)}</td>
+      <td><span class="status ${escapeHtml(statusClass(r.submitted ? 'Submitted' : 'Not yet submitted', 'weeklyUpdate'))}">${r.submitted ? 'Submitted' : 'Not yet submitted'}</span></td>
+      <td>${r.submittedByUser ? escapeHtml(r.submittedByUser.name) : '<span class="hint">—</span>'}</td>
+      <td>${r.submittedAt ? formatDateTime(r.submittedAt) : '<span class="hint">—</span>'}</td>
+    </tr>
+  `).join('');
+
+  main.innerHTML = `
+    <h1>Weekly Updates</h1>
+    <p class="subtitle">Week of ${formatDate(data.weekStart)} &ndash; ${formatDate(weekEndOf(data.weekStart))}. Click a project to read its update before the call.</p>
+    <div class="card">
+      ${data.rows.length === 0 ? emptyStateHtml('No projects yet.') : `
+      <table>
+        <thead><tr><th>Project</th><th>Status</th><th>Submitted By</th><th>Submitted At</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>`}
+    </div>
+  `;
+
+  main.querySelectorAll('[data-open-project-updates]').forEach(row => {
+    row.addEventListener('click', () => setView('project-weekly-updates', { projectId: Number(row.dataset.openProjectUpdates) }));
+  });
+}
+
+function showWeeklyUpdateHistoryModal(main, entry) {
+  const modalRoot = main.querySelector('#weekly-update-history-modal-root');
+  if (!modalRoot) return;
+
+  const field = (label, value) => `
+    <div>
+      <label>${label}</label>
+      <p class="task-comment-text">${value ? escapeHtml(value) : '<span class="hint">—</span>'}</p>
+    </div>
+  `;
+
+  modalRoot.innerHTML = `
+    <div class="modal-overlay" id="weekly-update-history-overlay">
+      <div class="modal-card">
+        <button type="button" class="modal-close" id="weekly-update-history-close">&times;</button>
+        <h2>Week of ${formatDate(entry.weekStart)} &ndash; ${formatDate(entry.weekEnd)}</h2>
+        <p class="hint">Submitted by ${escapeHtml(entry.submittedByUser ? entry.submittedByUser.name : 'Unknown')} on ${formatDateTime(entry.submittedAt)}${entry.updatedAt ? ` &middot; last edited ${formatDateTime(entry.updatedAt)}` : ''}</p>
+        ${field('What Was Done', entry.whatWasDone)}
+        ${field('Issues / Blockers', entry.issues)}
+        ${field('Plan For Next Week', entry.planNextWeek)}
+        <div><label>% Complete</label><p>${entry.percentComplete == null ? '<span class="hint">—</span>' : entry.percentComplete + '%'}</p></div>
+      </div>
+    </div>
+  `;
+
+  const overlay = document.getElementById('weekly-update-history-overlay');
+  const close = () => { modalRoot.innerHTML = ''; };
+  document.getElementById('weekly-update-history-close').addEventListener('click', close);
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+}
+
+async function renderProjectWeeklyUpdates(main, projectId) {
+  main.innerHTML = `<p class="subtitle">Loading…</p>`;
+  const weekStart = mondayOf(new Date());
+  const weekEnd = weekEndOf(weekStart);
+  let project, history;
+  try {
+    project = await api('/projects/' + projectId);
+    history = await api('/projects/' + projectId + '/weekly-updates');
+  } catch (e) {
+    main.innerHTML = `<button type="button" class="back-link" id="back-to-projects">&larr; Back to Projects</button><p class="error-text">${escapeHtml(e.message)}</p>`;
+    main.querySelector('#back-to-projects').addEventListener('click', () => setView('projects'));
+    return;
+  }
+
+  const currentEntry = history.find(h => h.weekStart === weekStart) || null;
+  const historyEntries = history.filter(h => h.weekStart !== weekStart);
+  const progress = project.progress || 0;
+
+  const statusLabel = currentEntry ? 'Submitted' : 'Not yet submitted';
+  const canEditCurrent = !currentEntry || state.me.isAdmin || currentEntry.submittedBy === state.me.id;
+  const readOnlyCurrent = !!currentEntry && !canEditCurrent;
+
+  const currentFieldsHtml = `
+    <div><label>What was done this week</label><textarea name="whatWasDone" ${readOnlyCurrent ? 'readonly' : ''} placeholder="Summarize progress and work completed...">${escapeHtml(currentEntry ? currentEntry.whatWasDone : '')}</textarea></div>
+    <div><label>Issues or blockers</label><textarea name="issues" ${readOnlyCurrent ? 'readonly' : ''} placeholder="Anything blocking progress?">${escapeHtml(currentEntry ? currentEntry.issues : '')}</textarea></div>
+    <div><label>Plan for next week</label><textarea name="planNextWeek" ${readOnlyCurrent ? 'readonly' : ''} placeholder="What's planned for next week?">${escapeHtml(currentEntry ? currentEntry.planNextWeek : '')}</textarea></div>
+    <div><label>% Complete (optional)</label><input name="percentComplete" type="number" min="0" max="100" ${readOnlyCurrent ? 'readonly' : ''} value="${currentEntry ? (currentEntry.percentComplete == null ? '' : currentEntry.percentComplete) : progress}" /></div>
+  `;
+
+  const historyRows = historyEntries.length === 0
+    ? emptyStateRowHtml('No past weeks yet.', 3)
+    : historyEntries.map(h => `
+        <tr class="task-row-clickable" data-history-week="${escapeHtml(h.weekStart)}">
+          <td>${formatDate(h.weekStart)} &ndash; ${formatDate(h.weekEnd)}</td>
+          <td><span class="status ${escapeHtml(statusClass('Submitted', 'weeklyUpdate'))}">Submitted</span></td>
+          <td>${h.submittedByUser ? escapeHtml(h.submittedByUser.name) : 'Unknown'}</td>
+        </tr>
+      `).join('');
+
+  main.innerHTML = `
+    <button type="button" class="back-link" id="back-to-projects">&larr; Back to Projects</button>
+    <h1>${escapeHtml(project.name)}</h1>
+    <p class="subtitle">Filled in before the weekly call so the office and project manager can read it directly, rather than retyping it in the meeting.</p>
+    ${projectTabsHtml('project-weekly-updates')}
+
+    <div class="card">
+      <div class="section-header">
+        <h2>This Week: ${formatDate(weekStart)} &ndash; ${formatDate(weekEnd)}</h2>
+        <span class="status ${escapeHtml(statusClass(statusLabel, 'weeklyUpdate'))}">${escapeHtml(statusLabel)}</span>
+      </div>
+      ${currentEntry ? `<p class="hint">Submitted by ${escapeHtml(currentEntry.submittedByUser ? currentEntry.submittedByUser.name : 'Unknown')} on ${formatDateTime(currentEntry.submittedAt)}${currentEntry.updatedAt ? ` &middot; last edited ${formatDateTime(currentEntry.updatedAt)}` : ''}</p>` : ''}
+      ${readOnlyCurrent
+        ? `<div>${currentFieldsHtml}</div><p class="hint">Only ${escapeHtml(currentEntry.submittedByUser ? currentEntry.submittedByUser.name : 'the person who submitted this')} (or an admin) can edit this week's update.</p>`
+        : `<form id="weekly-update-form">${currentFieldsHtml}
+            <div id="weekly-update-error" class="error-text"></div>
+            <button type="submit" class="btn">${currentEntry ? 'Save Changes' : 'Submit This Week'}</button>
+          </form>`}
+    </div>
+
+    <div class="card">
+      <div class="section-header">
+        <h2>History</h2>
+        <button type="button" class="btn small secondary" id="export-weekly-updates-btn">Export History to Excel</button>
+      </div>
+      <table>
+        <thead><tr><th>Week</th><th>Status</th><th>Submitted By</th></tr></thead>
+        <tbody>${historyRows}</tbody>
+      </table>
+    </div>
+    <div id="weekly-update-history-modal-root"></div>
+  `;
+
+  main.querySelector('#back-to-projects').addEventListener('click', () => setView('projects'));
+  bindProjectTabs(main, projectId);
+
+  const form = main.querySelector('#weekly-update-form');
+  if (form) {
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const errBox = main.querySelector('#weekly-update-error');
+      errBox.textContent = '';
+      const body = {
+        whatWasDone: form.whatWasDone.value,
+        issues: form.issues.value,
+        planNextWeek: form.planNextWeek.value,
+        percentComplete: form.percentComplete.value === '' ? null : Number(form.percentComplete.value)
+      };
+      try {
+        if (currentEntry) {
+          await api(`/projects/${projectId}/weekly-updates/${weekStart}`, { method: 'PATCH', body: JSON.stringify(body) });
+        } else {
+          await api(`/projects/${projectId}/weekly-updates`, { method: 'POST', body: JSON.stringify(Object.assign({ weekStart }, body)) });
+        }
+        renderProjectWeeklyUpdates(main, projectId);
+      } catch (err) {
+        errBox.textContent = err.message;
+      }
+    });
+  }
+
+  main.querySelectorAll('[data-history-week]').forEach(row => {
+    row.addEventListener('click', () => {
+      const entry = historyEntries.find(h => h.weekStart === row.dataset.historyWeek);
+      if (entry) showWeeklyUpdateHistoryModal(main, entry);
+    });
+  });
+
+  const exportBtn = main.querySelector('#export-weekly-updates-btn');
+  if (exportBtn) {
+    exportBtn.addEventListener('click', async (e) => {
+      e.preventDefault();
+      exportBtn.disabled = true;
+      try {
+        const blobUrl = await authenticatedBlobUrl('/api/projects/' + projectId + '/weekly-updates/export/xlsx');
+        const a = document.createElement('a');
+        a.href = blobUrl;
+        a.download = project.name.replace(/[^a-z0-9]+/gi, '-') + '-weekly-updates.xlsx';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+      } catch (err) {
+        alert(err.message);
+      } finally {
+        exportBtn.disabled = false;
+      }
+    });
+  }
+}
+
+// ---------------- PROJECT PROFILE ----------------
+// Internal team and the project manager are derived, not stored — same
+// "team" definition Portfolio already uses (distinct assignees across the
+// project's tasks), plus the manager. External contacts link into the
+// existing (global) External Contacts list rather than duplicating it.
+
+async function renderProjectProfile(main, projectId) {
+  main.innerHTML = `<p class="subtitle">Loading…</p>`;
+  let profile;
+  try {
+    profile = await api('/projects/' + projectId + '/profile');
+  } catch (e) {
+    main.innerHTML = `<button type="button" class="back-link" id="back-to-projects">&larr; Back to Projects</button><p class="error-text">${escapeHtml(e.message)}</p>`;
+    main.querySelector('#back-to-projects').addEventListener('click', () => setView('projects'));
+    return;
+  }
+
+  const canEdit = state.me.isAdmin || profile.createdBy === state.me.id;
+  let externalDirectory = [];
+  if (canEdit) {
+    try { externalDirectory = await api('/external-contacts'); } catch (e) { externalDirectory = []; }
+  }
+
+  const stageOptions = state.stages.map(s => `<option value="${escapeHtml(s)}" ${s === profile.stage ? 'selected' : ''}>${escapeHtml(s)}</option>`).join('');
+
+  const identityHtml = canEdit ? `
+    <form id="profile-edit-form">
+      <div class="form-row">
+        <div><label>Project Name</label><input name="name" required value="${escapeHtml(profile.name)}" /></div>
+        <div><label>Project Code</label><input name="code" value="${escapeHtml(profile.code || '')}" placeholder="e.g. RBR-2026-01" /></div>
+      </div>
+      <div class="form-row">
+        <div><label>Client</label><input name="client" value="${escapeHtml(profile.client || '')}" /></div>
+        <div><label>Stage</label><select name="stage">${stageOptions}</select></div>
+      </div>
+      <div><label>Site Address</label><input name="siteAddress" value="${escapeHtml(profile.siteAddress || '')}" /></div>
+      <div><label>Description</label><textarea name="description">${escapeHtml(profile.description || '')}</textarea></div>
+      <div class="form-row">
+        <div><label>Start Date</label><input name="startDate" type="date" value="${profile.startDate || ''}" /></div>
+        <div><label>Target Completion Date</label><input name="endDate" type="date" value="${profile.endDate || ''}" /></div>
+      </div>
+      <div id="profile-edit-error" class="error-text"></div>
+      <button type="submit" class="btn">Save Profile</button>
+    </form>
+  ` : `
+    <div class="modal-dates">
+      <div><label>Project Code</label><div>${profile.code ? escapeHtml(profile.code) : '<span class="hint">—</span>'}</div></div>
+      <div><label>Stage</label><div><span class="badge ${escapeHtml(badgeColorClass(profile.stage, 'stage'))}">${escapeHtml(profile.stage)}</span></div></div>
+    </div>
+    <div class="modal-dates">
+      <div><label>Client</label><div>${profile.client ? escapeHtml(profile.client) : '<span class="hint">—</span>'}</div></div>
+      <div><label>Site Address</label><div>${profile.siteAddress ? escapeHtml(profile.siteAddress) : '<span class="hint">—</span>'}</div></div>
+    </div>
+    <p class="hint">${escapeHtml(profile.description || 'No description')}</p>
+    <div class="modal-dates">
+      <div><label>Start Date</label><div>${formatDate(profile.startDate)}</div></div>
+      <div><label>Target Completion</label><div>${formatDate(profile.endDate)}</div></div>
+    </div>
+  `;
+
+  const internalHtml = profile.internalContacts.length === 0
+    ? `<p class="hint">No internal team members yet.</p>`
+    : `<ul class="modal-team-list">${profile.internalContacts.map(u => `
+        <li>
+          <span>${escapeHtml(u.name)}${u.id === profile.createdBy ? ' <span class="hint">(Project Manager)</span>' : ''}</span>
+          <span class="badge role-${escapeHtml(u.role)}">${escapeHtml(u.role)}</span>
+          <span class="hint">${u.phone ? escapeHtml(u.phone) + ' &middot; ' : ''}${escapeHtml(u.email)}</span>
+        </li>
+      `).join('')}</ul>`;
+
+  const externalRows = profile.externalContacts.length === 0
+    ? emptyStateRowHtml('No external contacts linked yet.', canEdit ? 4 : 3)
+    : profile.externalContacts.map(link => `
+        <tr>
+          <td>${escapeHtml(link.contact.name)} <span class="hint">(${escapeHtml(link.contact.company)})</span></td>
+          <td>${escapeHtml(link.roleOnProject)}</td>
+          <td>${link.contact.email ? `<a href="mailto:${encodeURIComponent(link.contact.email)}">${escapeHtml(link.contact.email)}</a>` : '<span class="hint">—</span>'}${link.contact.phone ? `<div class="hint">${escapeHtml(link.contact.phone)}</div>` : ''}</td>
+          ${canEdit ? `<td><button type="button" class="btn small secondary" data-remove-contact="${link.id}">Remove</button></td>` : ''}
+        </tr>
+      `).join('');
+
+  const addContactHtml = canEdit ? `
+    <form id="add-contact-form" class="form-row" style="margin-top:0.8rem; align-items:flex-end;">
+      <div>
+        <label>External Contact</label>
+        <select name="externalContactId" required>
+          <option value="">— Choose —</option>
+          ${externalDirectory.map(c => `<option value="${c.id}">${escapeHtml(c.name)} (${escapeHtml(c.company)})</option>`).join('')}
+        </select>
+      </div>
+      <div><label>Role on this project</label><input name="roleOnProject" required placeholder="e.g. Client Representative" /></div>
+      <button type="submit" class="btn">Add</button>
+    </form>
+    <div id="add-contact-error" class="error-text"></div>
+  ` : '';
+
+  main.innerHTML = `
+    <button type="button" class="back-link" id="back-to-projects">&larr; Back to Projects</button>
+    <div class="section-header">
+      <h1>${escapeHtml(profile.name)}</h1>
+      <button type="button" class="btn secondary" id="print-profile-btn">Print</button>
+    </div>
+    ${projectTabsHtml('project-profile')}
+
+    <div class="card">
+      <h2>Project Profile</h2>
+      ${identityHtml}
+    </div>
+
+    <div class="card">
+      <h2>Internal Team</h2>
+      ${internalHtml}
+    </div>
+
+    <div class="card">
+      <h2>Client &amp; External Contacts</h2>
+      <table>
+        <thead><tr><th>Contact</th><th>Role on Project</th><th>Contact Info</th>${canEdit ? '<th></th>' : ''}</tr></thead>
+        <tbody>${externalRows}</tbody>
+      </table>
+      ${addContactHtml}
+    </div>
+  `;
+
+  main.querySelector('#back-to-projects').addEventListener('click', () => setView('projects'));
+  bindProjectTabs(main, projectId);
+
+  const printBtn = main.querySelector('#print-profile-btn');
+  if (printBtn) printBtn.addEventListener('click', (e) => { e.preventDefault(); window.print(); });
+
+  const profileForm = main.querySelector('#profile-edit-form');
+  if (profileForm) {
+    profileForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const errBox = main.querySelector('#profile-edit-error');
+      errBox.textContent = '';
+      try {
+        await api('/projects/' + projectId, {
+          method: 'PATCH',
+          body: JSON.stringify({
+            name: profileForm.name.value,
+            code: profileForm.code.value,
+            client: profileForm.client.value,
+            stage: profileForm.stage.value,
+            siteAddress: profileForm.siteAddress.value,
+            description: profileForm.description.value,
+            startDate: profileForm.startDate.value,
+            endDate: profileForm.endDate.value
+          })
+        });
+        renderProjectProfile(main, projectId);
+      } catch (err) {
+        errBox.textContent = err.message;
+      }
+    });
+  }
+
+  const addContactForm = main.querySelector('#add-contact-form');
+  if (addContactForm) {
+    addContactForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const errBox = main.querySelector('#add-contact-error');
+      errBox.textContent = '';
+      try {
+        await api('/projects/' + projectId + '/contacts', {
+          method: 'POST',
+          body: JSON.stringify({ externalContactId: addContactForm.externalContactId.value, roleOnProject: addContactForm.roleOnProject.value })
+        });
+        renderProjectProfile(main, projectId);
+      } catch (err) {
+        errBox.textContent = err.message;
+      }
+    });
+  }
+
+  main.querySelectorAll('[data-remove-contact]').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.preventDefault();
+      if (!confirm('Remove this contact from the project?')) return;
+      try {
+        await api('/projects/' + projectId + '/contacts/' + btn.dataset.removeContact, { method: 'DELETE' });
+        renderProjectProfile(main, projectId);
+      } catch (err) {
+        alert(err.message);
+      }
+    });
+  });
+}
+
 // ---------------- TEAM (admin) ----------------
 
 async function renderTeam(main) {
@@ -3240,6 +3640,26 @@ function formatDateTime(isoStr) {
   if (!isoStr) return '—';
   const d = new Date(isoStr);
   return d.toLocaleString(undefined, { year: 'numeric', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+}
+
+// Mirrors db.js's mondayOf() exactly (weekly updates run Monday-Sunday) so
+// the client and server always agree on which week "today" falls in.
+function mondayOf(dateInput) {
+  const d = typeof dateInput === 'string' ? new Date(dateInput + 'T00:00:00') : new Date(dateInput);
+  const day = d.getDay();
+  const diff = day === 0 ? -6 : 1 - day;
+  const monday = new Date(d);
+  monday.setDate(d.getDate() + diff);
+  const yyyy = monday.getFullYear();
+  const mm = String(monday.getMonth() + 1).padStart(2, '0');
+  const dd = String(monday.getDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+function weekEndOf(weekStartStr) {
+  const d = new Date(weekStartStr + 'T00:00:00');
+  d.setDate(d.getDate() + 6);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
 function monthLabel(d) {

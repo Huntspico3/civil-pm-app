@@ -1157,3 +1157,16 @@ body.gantt-dragging { user-select: none; }
     animation: none;
   }
 }
+
+/* ============ PRINT (Project Profile's "Print" button) ============ */
+/* Plain browser printing, no separate print template — hide everything
+   that's navigation or an interactive control (the sidebar, the mobile
+   topbar, every button, the tab bar) and let the page's own cards print
+   full-width, so whatever's currently on screen prints cleanly as-is. */
+@media print {
+  .sidebar, .sidebar-backdrop, .mobile-topbar, .back-link, .dash-toggle, button {
+    display: none !important;
+  }
+  .main-content { padding: 0; }
+  .card { box-shadow: none; border: 1px solid var(--border); break-inside: avoid; }
+}
