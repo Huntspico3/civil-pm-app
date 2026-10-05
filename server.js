@@ -697,6 +697,26 @@ app.post('/api/projects/:id/weekly-updates', requireAuth, (req, res) => {
   db.save(data);
   logAudit(req, `Weekly update submitted for week of ${weekStart}`, project.name, project.name);
   res.status(201).json(enrichWeeklyUpdate(update, data));
+
+  // Fire-and-forget, same pattern as the RFI/weekly-summary emails: never
+  // delay or fail the response above. First submission only — an edit
+  // (the PATCH route) doesn't re-notify.
+  const weekLabel = shortDayMonth(weekStart);
+  summaryRecipients(project, data)
+    .filter(u => u.id !== req.user.id)
+    .forEach(u => {
+      email.sendWeeklyUpdateSubmittedEmail({
+        to: u.email,
+        toName: u.name,
+        projectName: project.name,
+        submittedByName: req.user.name,
+        weekLabel,
+        whatWasDone: update.whatWasDone,
+        issues: update.issues,
+        planNextWeek: update.planNextWeek,
+        percentComplete: update.percentComplete
+      }).catch(() => {});
+    });
 });
 
 app.patch('/api/projects/:id/weekly-updates/:weekStart', requireAuth, (req, res) => {
@@ -2223,6 +2243,80 @@ setTimeout(() => {
 setInterval(() => {
   runWeeklySummaryCheck().catch(err => console.warn('Weekly summary check failed:', err.message));
 }, SUMMARY_CHECK_INTERVAL_MS);
+
+// --- weekly update reminder (Friday afternoon, per project with no update yet) ---
+// Same hourly setTimeout/setInterval pattern as the weekly summary check above.
+const REMINDER_CHECK_INTERVAL_MS = 60 * 60 * 1000;
+
+// "5 Oct" style label for an ISO date string — used in the submitted-update
+// notification email.
+function shortDayMonth(dateStr) {
+  const d = new Date(dateStr + 'T00:00:00');
+  return `${d.getDate()} ${d.toLocaleDateString('en-US', { month: 'short' })}`;
+}
+
+// True once it's Friday at or after 12:00 in the given IANA timezone. Using
+// Intl here (rather than a date library) to read the wall-clock weekday/hour
+// in an arbitrary timezone regardless of what timezone the server itself
+// runs in.
+function isFridayAtOrAfterNoon(timeZone) {
+  // Local testing escape hatch only — lets the Friday/noon gate be bypassed
+  // without waiting for an actual Friday. Doesn't affect how weekly updates
+  // are saved or any permission check.
+  if (process.env.REMINDER_FORCE_RUN === 'true') return true;
+  try {
+    const parts = new Intl.DateTimeFormat('en-US', { timeZone, weekday: 'short', hour: 'numeric', hourCycle: 'h23' }).formatToParts(new Date());
+    const weekday = parts.find(p => p.type === 'weekday').value;
+    const hour = Number(parts.find(p => p.type === 'hour').value);
+    return weekday === 'Fri' && hour >= 12;
+  } catch (err) {
+    console.warn(`Invalid REMINDER_TZ "${timeZone}" — skipping the weekly update reminder check:`, err.message);
+    return false;
+  }
+}
+
+async function runWeeklyUpdateReminderCheck() {
+  const timeZone = process.env.REMINDER_TZ || 'Europe/London';
+  if (!isFridayAtOrAfterNoon(timeZone)) return;
+
+  const data = db.load();
+  const weekStart = db.mondayOf(new Date());
+  const doneStatus = data.taskStatuses[data.taskStatuses.length - 1];
+  let changed = false;
+
+  for (const project of data.projects) {
+    if (project.weeklyReminderSentFor === weekStart) continue;
+    const hasUpdate = data.weeklyUpdates.some(w => w.projectId === project.id && w.weekStart === weekStart);
+    if (hasUpdate) continue;
+
+    const recipients = [];
+    const manager = data.users.find(u => u.id === project.createdBy);
+    if (manager) recipients.push(manager);
+    data.tasks
+      .filter(t => t.projectId === project.id && t.assigneeId && t.status !== doneStatus)
+      .forEach(t => {
+        const assignee = data.users.find(u => u.id === t.assigneeId);
+        if (assignee && !recipients.some(r => r.id === assignee.id)) recipients.push(assignee);
+      });
+
+    if (recipients.length === 0) continue; // no assignees and no manager — nothing to notify
+
+    recipients.forEach(u => {
+      email.sendWeeklyUpdateReminderEmail({ to: u.email, toName: u.name, projectName: project.name }).catch(() => {});
+    });
+    project.weeklyReminderSentFor = weekStart;
+    changed = true;
+  }
+
+  if (changed) db.save(data);
+}
+
+setTimeout(() => {
+  runWeeklyUpdateReminderCheck().catch(err => console.warn('Weekly update reminder check failed:', err.message));
+}, 20000);
+setInterval(() => {
+  runWeeklyUpdateReminderCheck().catch(err => console.warn('Weekly update reminder check failed:', err.message));
+}, REMINDER_CHECK_INTERVAL_MS);
 
 // --- audit log (admin-only; write-only from every other angle) ---
 // There is deliberately no PATCH/DELETE for audit entries anywhere in this
